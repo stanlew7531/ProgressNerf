@@ -1,0 +1,37 @@
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/OGNerf_masked/"
+batch_size: 2
+num_workers: 1
+train_epochs: 15000
+eval_period: 10
+save_period: 100
+device: "cuda:1"
+train_dataloader:
+    dataloader: "toolsPartsDataloader"
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00'], datasetType: "train", samplesLimit: -1}
+test_dataloader:
+    dataloader: "toolsPartsDataloader"
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00'], datasetType: "test", samplesLimit: 5}
+desired_tool: "clamp_bottom_clamp"
+apply_masks: ['clamp_bottom_clamp', 'clamp_handle']
+raypicker: "weighted_raypicker"
+weighted_raypicker: { num_rays: 1024}
+raysampler: "perturbed_raysampler"
+perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 100, sample_std: 0.1}
+camera_fx: 536.5441342081624
+camera_fy: 537.6663041098749
+camera_tx: 324.1496087846382
+camera_ty: 224.2990274169881
+render_resoluion: [640,480]
+coarse_model:
+    nnModel: "OGNerf"
+    OGNerf: {pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
+fine_model:
+    nnModel: "OGNerf"
+    OGNerf: {pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
+    raysampler: "weighted_raysampler"
+    weighted_raysampler: {num_samples: 100}
+posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10}}
+dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
+optim_lr: 0.001
+renderer: "neural_renderer"
+neural_renderer: {}
