@@ -15,6 +15,7 @@ desired_tool: "clamp_bottom_clamp"
 apply_masks: ['clamp_bottom_clamp', 'clamp_handle']
 raypicker: "weighted_raypicker"
 weighted_raypicker: { num_rays: 1024}
+eval_subbatch_size: 1024
 raysampler: "perturbed_raysampler"
 perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 100, sample_std: 0.1}
 camera_fx: 536.5441342081624

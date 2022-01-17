@@ -109,6 +109,8 @@ class OGNerfArch(object):
         self.raypicker = get_raypicker(config['raypicker'])(config[config['raypicker']])
         self.raypicker.setCameraParameters(self.cam_matrix, self.render_height, self.render_width)
 
+        self.eval_subBatchSize = config['eval_subbatch_size']
+
         self.raysampler = get_raysampler(config['raysampler'])(config[config['raysampler']])
 
         self.train_epochs = config['train_epochs']
@@ -232,13 +234,12 @@ class OGNerfArch(object):
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
         ray_origins, ray_dirs = self.raypicker.getAllRays(cam_poses) # (batch_dim, width*height, 3), (batch_dim, width*height, 3)
         total_sample_size = ray_origins.shape[1]
-        eval_subBatchSize = 1024
-        num_subBatches = math.ceil(total_sample_size / eval_subBatchSize)
+        num_subBatches = math.ceil(total_sample_size / self.eval_subBatchSize)
         full_rendering = {}
 
         for subBatch_idx in range(num_subBatches):
-            start_idx = subBatch_idx * eval_subBatchSize
-            end_idx = min((subBatch_idx + 1) * eval_subBatchSize, total_sample_size)
+            start_idx = subBatch_idx * self.eval_subBatchSize
+            end_idx = min((subBatch_idx + 1) * self.eval_subBatchSize, total_sample_size)
             subBatch_ray_origins = ray_origins[:,start_idx:end_idx,:]
             subBatch_ray_dirs = ray_dirs[:,start_idx:end_idx,:]
             subBatch_rendering = self.render(subBatch_ray_origins, subBatch_ray_dirs)
