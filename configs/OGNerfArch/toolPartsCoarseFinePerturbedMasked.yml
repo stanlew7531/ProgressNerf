@@ -2,7 +2,7 @@ baseDir: "/home/stanlew/Documents/ProgressNerfModels/OGNerf_masked/"
 batch_size: 2
 num_workers: 1
 train_epochs: 15000
-eval_period: 10
+testPeriod: 10
 save_period: 100
 device: "cuda:1"
 train_dataloader:

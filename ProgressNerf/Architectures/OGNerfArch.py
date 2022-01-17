@@ -60,46 +60,70 @@ class OGNerfArch(object):
         print("parsing config")
         self.parseConfig(config)
 
+        if(self.train_loader is not None):
+            # if we are training, we init the NN models and the optimizer
+            print("initializing optimizer")
+            learning_params = list(self.nn.parameters())
+            self.nn.to(self.device)
+            if(self.nn_fine is not None):
+                self.nn_fine.to(self.device)
+                learning_params = learning_params + list(self.nn_fine.parameters())
 
-        print("initializing optimizer")
-        learning_params = list(self.nn.parameters())
-        self.nn.to(self.device)
-        if(self.nn_fine is not None):
-            self.nn_fine.to(self.device)
-            learning_params = learning_params + list(self.nn_fine.parameters())
+            # setup optimizer and loss function
+            self.optimizer = torch.optim.Adam(learning_params, lr=self.lr)
 
-        # setup optimizer and loss function
-        self.optimizer = torch.optim.Adam(learning_params, lr=self.lr)
-
-        if(self.start_epoch is not None):
-            load_checkpoint_dir = ""
-            if(self.start_epoch <= 0):
-                latest_epoch = last_epoch_from_output_dir(self.base_dir)
-                load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
-                self.start_epoch = latest_epoch
+            if(self.start_epoch is not None):
+                load_checkpoint_dir = ""
+                if(self.start_epoch <= 0):
+                    latest_epoch = last_epoch_from_output_dir(self.base_dir)
+                    load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
+                    self.start_epoch = latest_epoch
+                else:
+                    load_checkpoint_dir= os.path.join(self.base_dir, "epoch_{0}".format(self.start_epoch))
+                print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
+                self.loadTrainState(load_checkpoint_dir)
+                print("resuming training from epoch {0}...".format(self.start_epoch))
             else:
-                load_checkpoint_dir= os.path.join(self.base_dir, "epoch_{0}".format(self.start_epoch))
-            print("loading model from {0}".format(load_checkpoint_dir))
-            self.loadTrainState(load_checkpoint_dir)
-            print("resuming training from epoch {0}...".format(self.start_epoch))
+                print("starting training from epoch 0...")
+                self.start_epoch = 0
         else:
-            print("starting training from epoch 0...")
-            self.start_epoch = 0
+            # otherwise, only init the NN models
+            self.nn.to(self.device)
+            if(self.nn_fine is not None):
+                self.nn_fine.to(self.device)
+
+            if(self.start_epoch is not None):
+                load_checkpoint_dir = ""
+                if(self.start_epoch <= 0):
+                    latest_epoch = last_epoch_from_output_dir(self.base_dir)
+                    load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
+                    self.start_epoch = latest_epoch
+                else:
+                    load_checkpoint_dir= os.path.join(self.base_dir, "epoch_{0}".format(self.start_epoch))
+                print("loading ONLY model params from {0}".format(load_checkpoint_dir))
+                self.loadNNModels(load_checkpoint_dir)
+            else:
+                raise Exception("load_from_epoch must be defined to load models when in evaluation mode!")
+
 
     # extract this architecture's parameters from the configuration YAML file
     def parseConfig(self, config:Dict):
         self.base_dir = config['baseDir']
 
-        self.evalPeriod = config['eval_period']
-        self.savePeriod = config['save_period'] 
+        self.testPeriod = config['testPeriod'] if 'testPeriod' in config.keys() else None
+        self.savePeriod = config['save_period']  if 'save_period' in config.keys() else None
 
-        train_loader_config = config['train_dataloader']
-        self.train_loader = get_dataloader(train_loader_config['dataloader'])(train_loader_config[train_loader_config['dataloader']])
-        test_loader_config = config['test_dataloader']
-        self.test_loader = get_dataloader(test_loader_config['dataloader'])(test_loader_config[test_loader_config['dataloader']])
+        self.train_loader = None
+        self.test_loader = None
+        if('train_dataloader' in config.keys()):
+            train_loader_config = config['train_dataloader']
+            self.train_loader = get_dataloader(train_loader_config['dataloader'])(train_loader_config[train_loader_config['dataloader']])
+        if('test_dataloader' in config.keys()):
+            test_loader_config = config['test_dataloader']
+            self.test_loader = get_dataloader(test_loader_config['dataloader'])(test_loader_config[test_loader_config['dataloader']])
 
-        self.batch_size = config['batch_size']
-        self.num_workers = config['num_workers']
+        self.batch_size = config['batch_size'] if 'batch_size' in config.keys() else None
+        self.num_workers = config['num_workers'] if 'num_workers' in config.keys() else None
         self.device = config['device']
 
         self.cam_f_t = [config['camera_fx'],config['camera_fy'],config['camera_tx'],config['camera_ty']]
@@ -114,8 +138,8 @@ class OGNerfArch(object):
 
         self.raysampler = get_raysampler(config['raysampler'])(config[config['raysampler']])
 
-        self.train_epochs = config['train_epochs']
-        self.lr = config['optim_lr']
+        self.train_epochs = config['train_epochs'] if 'train_epochs' in config.keys() else None
+        self.lr = config['optim_lr'] if 'optim_lr' in config.keys() else None
 
         pos_enc_dict = config['posEncoder']
         self.pos_encoder = get_encoder(pos_enc_dict['encoder'])(pos_enc_dict[pos_enc_dict['encoder']])
@@ -158,11 +182,15 @@ class OGNerfArch(object):
             torch.save(self.nn_fine.state_dict(), os.path.join(output_dir, "mlp_dict_fine.ptr"))
         torch.save(self.optimizer.state_dict(), os.path.join(output_dir, "optimizer_dict.ptr"))
 
-    def loadTrainState(self, checkpoint_dir:str = "latest"):
+    def loadNNModels(self, checkpoint_dir:str = "latest"):
         input_dir = os.path.join(self.base_dir, checkpoint_dir)
         self.nn.load_state_dict(torch.load(os.path.join(input_dir, "mlp_dict.ptr")))
         if(self.nn_fine is not None):
             self.nn_fine.load_state_dict(torch.load(os.path.join(input_dir,"mlp_dict_fine.ptr")))
+
+    def loadTrainState(self, checkpoint_dir:str = "latest"):
+        input_dir = os.path.join(self.base_dir, checkpoint_dir)
+        self.loadNNModels(checkpoint_dir)
         self.optimizer.load_state_dict(torch.load(os.path.join(input_dir, "optimizer_dict.ptr")))
 
     # performs the per-ray sampling and final rendering
@@ -233,10 +261,26 @@ class OGNerfArch(object):
     # performs a rendering of the full image
     # unlike doTrainRendering, the raypicker is not run (except to the the totality to rays created). Instead, we
     # extract sub-batches of all rays for rendering to prevent out-of-memory issues
-    def doEvalRendering(self, sample_batched):
+    def doTestRendering(self, sample_batched):
         test_imgs = sample_batched['image'].to(self.device) # (batch_size, W, H, 3)
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
-        ray_origins, ray_dirs = self.raypicker.getAllRays(cam_poses) # (batch_dim, width*height, 3), (batch_dim, width*height, 3)
+        full_rendering = self.doFullRender(cam_poses)
+        return full_rendering, test_imgs
+
+    # performs a rendering at an arbitrary camera pose for the entire image.
+    # this method has no dependency on the underlying dataloader, so it can be called in applications
+    # or other packages which are disconnected from the original training process
+    # note that it is called in doTestRendering (for use during the training process), so some care is required
+    # before making extensive modifications
+    # camera_poses should be a Tensor of size (N, 4, 4) - comprised of N, 4x4 homogenous camera poses (in OpenCV/RH coords)
+    def doEvalRendering(self, camera_poses:torch.Tensor):
+        with torch.no_grad():
+            rendering_output = self.doFullRender(camera_poses)
+            rgb_output = rendering_output['rgb'].contiguous().reshape((camera_poses.shape[0], self.render_width, self.render_height, 3)).transpose(1,2).contiguous()
+            return rgb_output
+
+    def doFullRender(self, camera_poses:torch.Tensor):
+        ray_origins, ray_dirs = self.raypicker.getAllRays(camera_poses.to(self.device)) # (batch_dim, width*height, 3), (batch_dim, width*height, 3)
         total_sample_size = ray_origins.shape[1]
         num_subBatches = math.ceil(total_sample_size / self.eval_subBatchSize)
         full_rendering = {}
@@ -252,9 +296,14 @@ class OGNerfArch(object):
             else:
                 full_rendering['rgb'] = subBatch_rendering['rgb'].clone()
 
-        return full_rendering, test_imgs
+        return full_rendering
 
     def train(self):
+
+        # verify the training conditions are met in the provided config
+        if(self.train_loader is None or self.test_loader is None):
+            raise Exception("dataloaders for train and test sets are required for training!")
+
         # create the Tensorboard Writer
         self.tb_writer = SummaryWriter(log_dir=str(self.base_dir))
 
@@ -293,7 +342,7 @@ class OGNerfArch(object):
             self.optimizer.zero_grad()
 
             # if we need to do evaluation this epoch
-            if(not(epoch == 0) and (epoch % self.evalPeriod == 0)):
+            if(not(epoch == 0) and (epoch % self.testPeriod == 0)):
                 # Do test/eval
                 self.nn.eval()
                 if(self.nn_fine is not None):
@@ -301,7 +350,7 @@ class OGNerfArch(object):
                 # render the entire image instead of only the sampled pixels, compute loss & send to tensorboard
                 with torch.no_grad():
                     for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
-                        rendered_output, test_images = self.doEvalRendering(sample_batched)
+                        rendered_output, test_images = self.doTestRendering(sample_batched)
                         rgb_output = rendered_output['rgb'].contiguous().reshape((1, self.render_width, self.render_height, 3)).transpose(1,2).contiguous()
                         loss_rgb_i_test = loss_rgb(test_images, rgb_output)
                         losses_test.append(loss_rgb_i_test.item())
@@ -328,7 +377,7 @@ class OGNerfArch(object):
         losses_test = []
         with torch.no_grad():
             for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
-                rendered_output, test_images = self.doEvalRendering(sample_batched)
+                rendered_output, test_images = self.doTestRendering(sample_batched)
                 rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
                 loss_rgb_i_test = loss_rgb(test_images, rgb_output)
                 losses_test.append(loss_rgb_i_test.item())

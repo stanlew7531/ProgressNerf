@@ -1,21 +1,9 @@
 baseDir: "/home/stanlew/Documents/ProgressNerfModels/OGNerf_sigmoid/"
 load_from_epoch: -1
-batch_size: 2
-num_workers: 1
-train_epochs: 15000
-testPeriod: 10
-save_period: 100
-device: "cuda:1"
-train_dataloader:
-    dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00'], datasetType: "train", samplesLimit: -1}
-test_dataloader:
-    dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00'], datasetType: "test", samplesLimit: 5}
-desired_tool: "clamp_bottom_clamp"
+device: "cuda:0"
 raypicker: "random_raypicker"
 random_raypicker: { num_rays: 1024}
-eval_subbatch_size: 1024
+eval_subbatch_size: 256
 raysampler: "perturbed_raysampler"
 perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 100, sample_std: 0.1}
 camera_fx: 536.5441342081624
@@ -33,6 +21,5 @@ fine_model:
     weighted_raysampler: {num_samples: 100}
 posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10}}
 dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
-optim_lr: 0.001
 renderer: "neural_renderer"
 neural_renderer: {}
