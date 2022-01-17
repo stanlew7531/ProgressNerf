@@ -13,6 +13,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from typing import Dict
 from re import L, S
+import sys
 import yaml
 
 # internal imports
@@ -132,6 +133,9 @@ class OGNerfArch(object):
 
             self.nn_fine = get_model(fine_config['nnModel'])(fine_config[fine_config['nnModel']])
             self.raysampler_fine = get_raysampler(fine_config['raysampler'])(config[config['raysampler']])
+        else:
+            self.nn_fine = None
+            self.raysampler_fine = None
 
         self.tool = config['desired_tool']
         self.masks = None
@@ -341,5 +345,8 @@ class OGNerfArch(object):
 if __name__=="__main__":
     torch.manual_seed(0)
     np.random.seed(0)
-    arch = OGNerfArch("/home/stanlew/src/ProgressNerf/configs/OGNerfArch/toolPartsCoarseFinePerturbed.yml")
+    configFile = "./configs/OGNerfArch/toolPartsCoarseFinePerturbed.yml"
+    if(len(sys.argv) == 2):
+        configFile = str(sys.argv[1])
+    arch = OGNerfArch(configFile)
     arch.train()
