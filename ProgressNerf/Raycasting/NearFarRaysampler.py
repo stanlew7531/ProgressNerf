@@ -10,7 +10,7 @@ class NearFarRaysampler(AbstractRaysampler):
         self.far = config["far_plane"]
         self.num_samples = config["num_samples"]
     
-    def sampleRays(self, ray_origins: torch.Tensor, ray_dirs: torch.Tensor, other_info:Dict):
+    def sampleRays(self, ray_origins: torch.Tensor, ray_dirs: torch.Tensor, other_info:Dict=None):
         '''
         ray_origins: (batch_size, num_rays, 3)
         ray_dirs: (batch_size, num_rays, 3)
