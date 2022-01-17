@@ -1,45 +1,89 @@
+# dependency imports
+import cv2 as cv
 from datetime import datetime
-from re import L
-from typing import Dict
+from doctest import OutputChecker
+import math
+import numpy as np
 from numpy.core.numeric import full
+import os
+from os.path import exists
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-import math
 from tqdm import tqdm
-import numpy as np
-import os
-import cv2 as cv
+from typing import Dict
+from re import L, S
+import yaml
+
+# internal imports
 from ProgressNerf.Registries.ModelRegistry import get_model
 from ProgressNerf.Registries.DataloaderRegistry import get_dataloader
 from ProgressNerf.Registries.RaypickerRegistry import get_raypicker
 from ProgressNerf.Registries.RaysamplerRegistry import get_raysampler
 from ProgressNerf.Registries.EncoderRegistry import get_encoder
 from ProgressNerf.Registries.RendererRegistry import get_renderer
+from ProgressNerf.Utils.CameraUtils import BuildCameraMatrix
+from ProgressNerf.Utils.FolderUtils import last_epoch_from_output_dir
+# import the supported arch dataloaders here
 import ProgressNerf.Dataloading.ToolsPartsDataloader
+
+# import the supported arch raypickers here
 import ProgressNerf.Raycasting.RandomRaypicker
-import ProgressNerf.Raycasting.NearFarRaysampler
 import ProgressNerf.Raycasting.WeightedRaypicker
+
+# import the supported arch raysamplers here
+import ProgressNerf.Raycasting.NearFarRaysampler
 import ProgressNerf.Raycasting.WeightedRaysampler
 import ProgressNerf.Raycasting.PerturbedRaysampler
+
+# import the supported arch encoders here
 import ProgressNerf.Encoders.PositionalEncoder
+
+# import the supported arch models here
 import ProgressNerf.Models.OGNerf
+
+# import the supported arch renderers here
 import ProgressNerf.NeuralRendering.NeuralRenderer
-from ProgressNerf.Utils.CameraUtils import BuildCameraMatrix
-import yaml
 
 # this architecture represents the original NeRF paper as proposed by Mildenhall et al.
 # see https://arxiv.org/abs/2003.08934 for further details
 class OGNerfArch(object):
     def __init__(self, configFile:str) -> None:
         super().__init__()
-        
+        print("loading config at {0}".format(configFile))
         config = yaml.load(open(configFile,'r'), yaml.FullLoader)
 
         # pos enc levels = 10
         # dir enc levels = 4
         # parse the configuration & populate values
+        print("parsing config")
         self.parseConfig(config)
+
+
+        print("initializing optimizer")
+        learning_params = list(self.nn.parameters())
+        self.nn.to(self.device)
+        if(self.nn_fine is not None):
+            self.nn_fine.to(self.device)
+            learning_params = learning_params + list(self.nn_fine.parameters())
+
+        # setup optimizer and loss function
+        self.optimizer = torch.optim.Adam(learning_params, lr=self.lr)
+
+        if(self.start_epoch is not None):
+            load_checkpoint_dir = ""
+            if(self.start_epoch <= 0):
+                latest_epoch = last_epoch_from_output_dir(self.base_dir)
+                load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
+                self.start_epoch = latest_epoch
+            else:
+                load_checkpoint_dir= os.path.join(self.base_dir, "epoch_{0}".format(self.start_epoch))
+            print("loading model from {0}".format(load_checkpoint_dir))
+            self.loadTrainState(load_checkpoint_dir)
+            print("resuming training from epoch {0}...".format(self.start_epoch))
+        else:
+            print("starting training from epoch 0...")
+            self.start_epoch = 0
 
     # extract this architecture's parameters from the configuration YAML file
     def parseConfig(self, config:Dict):
@@ -94,6 +138,10 @@ class OGNerfArch(object):
 
         self.tb_writer = None
 
+        self.start_epoch = None
+        if('load_from_epoch' in config.keys()):
+            self.start_epoch = config['load_from_epoch']
+
     # helper function for saving the state of the training process
     def saveTrainState(self, checkpoint_dir:str = "latest"):
         output_dir = os.path.join(self.base_dir, checkpoint_dir)
@@ -103,6 +151,13 @@ class OGNerfArch(object):
         if(self.nn_fine is not None):
             torch.save(self.nn_fine.state_dict(), os.path.join(output_dir, "mlp_dict_fine.ptr"))
         torch.save(self.optimizer.state_dict(), os.path.join(output_dir, "optimizer_dict.ptr"))
+
+    def loadTrainState(self, checkpoint_dir:str = "latest"):
+        input_dir = os.path.join(self.base_dir, checkpoint_dir)
+        self.nn.load_state_dict(torch.load(os.path.join(input_dir, "mlp_dict.ptr")))
+        if(self.nn_fine is not None):
+            self.nn_fine.load_state_dict(torch.load(os.path.join(input_dir,"mlp_dict_fine.ptr")))
+        self.optimizer.load_state_dict(torch.load(os.path.join(input_dir, "optimizer_dict.ptr")))
 
     # performs the per-ray sampling and final rendering
     # this is where the raysampler is called, as well as the renderer
@@ -205,18 +260,14 @@ class OGNerfArch(object):
         # set the main models to train, move the GPU if necessary, and extract the optimization parameters
         self.nn.train()
         self.nn.to(self.device)
-        learning_params = list(self.nn.parameters())
         if(self.nn_fine is not None):
             self.nn_fine.train()
             self.nn_fine.to(self.device)
-            learning_params = learning_params + list(self.nn_fine.parameters())
-
-        # setup optimizer and loss function
-        self.optimizer = torch.optim.Adam(learning_params, lr=self.lr)
+        
         loss_rgb = torch.nn.MSELoss()
 
         # main training loop
-        for epoch in tqdm(range(self.train_epochs)):
+        for epoch in tqdm(range(self.start_epoch, self.train_epochs)):
             losses = []
             losses_test = []
             # Do training step
