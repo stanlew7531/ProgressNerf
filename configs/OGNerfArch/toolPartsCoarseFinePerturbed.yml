@@ -1,4 +1,5 @@
 baseDir: "/home/stanlew/Documents/ProgressNerfModels/OGNerf_sigmoid/"
+load_from_epoch: -1
 batch_size: 2
 num_workers: 1
 train_epochs: 15000
