@@ -76,13 +76,20 @@ class OGNerfArch(object):
                 load_checkpoint_dir = ""
                 if(self.start_epoch <= 0):
                     latest_epoch = last_epoch_from_output_dir(self.base_dir)
-                    load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
-                    self.start_epoch = latest_epoch
+                    if(latest_epoch < 0):
+                        print("no previous saved data found - starting training from epoch 0")
+                        self.start_epoch = 0
+                    else:
+                        load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
+                        self.start_epoch = latest_epoch
+                        print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
+                        self.loadTrainState(load_checkpoint_dir)
+                        print("resuming training from epoch {0}...".format(self.start_epoch))
                 else:
                     load_checkpoint_dir= os.path.join(self.base_dir, "epoch_{0}".format(self.start_epoch))
-                print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
-                self.loadTrainState(load_checkpoint_dir)
-                print("resuming training from epoch {0}...".format(self.start_epoch))
+                    print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
+                    self.loadTrainState(load_checkpoint_dir)
+                    print("resuming training from epoch {0}...".format(self.start_epoch))
             else:
                 print("starting training from epoch 0...")
                 self.start_epoch = 0
@@ -247,14 +254,17 @@ class OGNerfArch(object):
         # create the ray weights tensor based on the provided segmentation tools/parts
         # note that this is not always used by all raypickers (e.g. RandomRaypicker ignores this input)
         ray_weights = self.getSegementationWeighting(sample_batched)
-        
         # get the camera poses & run the raypicker
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
         ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
-
+        ijs_label = torch.zeros_like(train_imgs)
         render_result = self.render(ray_origins, ray_dirs)
+        # TODO: find out how to properly vectorize this indexing
+        train_pixels = torch.zeros_like(render_result['rgb'])
+        for i in range(train_pixels.shape[0]):
+            train_pixels[i] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
+            ijs_label[i, ijs[i,:,1], ijs[i,:,0], :] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
 
-        train_pixels = train_imgs[:, ijs[:,1], ijs[:,0], :]
 
         return render_result, train_pixels
 
@@ -389,7 +399,7 @@ class OGNerfArch(object):
                 self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, self.train_epochs)
         avg_mse_test = np.mean(losses_test)
         self.tb_writer.add_scalar('test/mse', avg_mse_test, self.train_epochs)
-        tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(self.train_epochs), avg_mse, avg_mse_test)
+        tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(self.train_epochs, avg_mse, avg_mse_test))
 
 if __name__=="__main__":
     torch.manual_seed(0)

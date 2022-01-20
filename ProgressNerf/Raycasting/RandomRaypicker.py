@@ -30,10 +30,13 @@ class RandomRaypicker(AbstractRaypicker):
         rays_to_pick = self.baseRays\
             .reshape((self.width * self.height, 3)).contiguous()\
                 .to(dtype = camera_tfs.dtype, device = camera_tfs.device) # (W*H, 3)
+
+        batch_size = camera_tfs.shape[0]
+                
         picked_rays_cache = torch.randperm(rays_to_pick.shape[0])[:self.num_rays] # (self.num_rays, 1)
         picked_js = torch.remainder(picked_rays_cache, self.height).to(dtype=torch.int64)
         picked_is = torch.floor(torch.divide(picked_rays_cache, self.height)).to(dtype=torch.int64)
-        picked_ijs = torch.cat((picked_is.unsqueeze(1), picked_js.unsqueeze(1)), dim=1)
+        picked_ijs = torch.cat((picked_is.unsqueeze(1), picked_js.unsqueeze(1)), dim=1).unsqueeze(0).repeat((batch_size,1,1))
         picked_rays = rays_to_pick[picked_rays_cache] # (self.num_rays, 3)
         camera_tfs = camera_tfs.unsqueeze(1) # (batch_dim, 1, 4, 4)
 
