@@ -49,7 +49,6 @@ import ProgressNerf.NeuralRendering.NeuralRenderer
 
 # import the supported arch loss functions here
 import ProgressNerf.Losses.MSELoss
-import ProgressNerf.Losses.SigmaRegMSELoss
 
 # this architecture represents the original NeRF paper as proposed by Mildenhall et al.
 # see https://arxiv.org/abs/2003.08934 for further details
@@ -238,8 +237,6 @@ class OGNerfArch(object):
             rendered_output_fine = self.renderer.renderRays(fine_mlp_outputs, resampled_distances)
             rendered_output['rgb'] = (rendered_output['rgb'] + rendered_output_fine['rgb']) / 2.0
             rendered_output['depth'] = (rendered_output['depth'] + rendered_output_fine['depth']) / 2.0
-            rendered_output['coarse_mlp_results'] = mlp_outputs
-            rendered_output['fine_mlp_results'] = fine_mlp_outputs
 
         return rendered_output
 
@@ -277,9 +274,7 @@ class OGNerfArch(object):
             train_pixels[i] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
             ijs_label[i, ijs[i,:,1], ijs[i,:,0], :] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
 
-        sigmas_coarse = render_result['coarse_mlp_results'][:,:,:,3].relu()# (batch_size, num_rays, num_samples)
-        sigmas_fine = render_result['fine_mlp_results'][:,:,:,3].relu()# (batch_size, num_rays, num_samples)
-        return render_result, train_pixels, sigmas_coarse, sigmas_fine
+        return render_result, train_pixels
 
     # performs a rendering of the full image
     # unlike doTrainRendering, the raypicker is not run (except to the the totality to rays created). Instead, we
@@ -350,9 +345,8 @@ class OGNerfArch(object):
             if(self.nn_fine is not None):
                 self.nn_fine.train()
             for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader)):
-                rendered_output, train_pixels, coarse_sigmas, fine_sigmas = self.doTrainRendering(sample_batched)
-                sigmas = torch.cat((coarse_sigmas, fine_sigmas), dim = 2) # (batch_size, num_rays, num_coarse_samples + num_fine_samples)
-                loss = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'], sigma_vals = sigmas)
+                rendered_output, train_pixels = self.doTrainRendering(sample_batched)
+                loss = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'])
                 loss.backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
