@@ -33,6 +33,7 @@ class WeightedRaypicker(AbstractRaypicker):
             raise ValueError("num_rays must be specified first!")
 
         ray_weights = kwargs["ray_weights"] # (batch_dim, height, width)
+        ray_weights = ray_weights.transpose(-1,-2).contiguous()
         batch_size = ray_weights.shape[0]
 
         rays_to_pick = self.baseRays\

@@ -1,20 +1,21 @@
-baseDir: "/home/stanlew/Documents/ProgressNerfModels/OGNerf_masked/"
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/OGNerf_clamp_handle_reg_loss/"
+load_from_epoch: -1
 batch_size: 2
 num_workers: 1
-train_epochs: 15000
+train_epochs: 100
 testPeriod: 10
-save_period: 100
+save_period: 10
 device: "cuda:1"
 train_dataloader:
     dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00'], datasetType: "train", samplesLimit: -1}
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','00_01','00_02','00_03','00_04','01','01_01','01_02','01_03'], datasetType: "train", samplesLimit: -1}
 test_dataloader:
     dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00'], datasetType: "test", samplesLimit: 5}
-desired_tool: "clamp_bottom_clamp"
-apply_masks: ['clamp_bottom_clamp', 'clamp_handle']
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','00_01','00_02','00_03','00_04','01','01_01','01_02','01_03'], datasetType: "test", samplesLimit: 5}
+desired_tool: "clamp_handle"
+apply_masks: ['clamp_handle']
 raypicker: "weighted_raypicker"
-weighted_raypicker: { num_rays: 1024}
+weighted_raypicker: { num_rays: 512}
 eval_subbatch_size: 1024
 raysampler: "perturbed_raysampler"
 perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 100, sample_std: 0.1}
@@ -36,3 +37,9 @@ dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
 optim_lr: 0.001
 renderer: "neural_renderer"
 neural_renderer: {}
+train_loss:
+    loss_fn: "mse_loss_sigma_regularized"
+    mse_loss_sigma_regularized: {sigma_regularization_term: 0.01}
+test_loss:
+    loss_fn: "mse_loss"
+    mse_loss: {}

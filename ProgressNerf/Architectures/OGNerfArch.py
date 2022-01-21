@@ -23,6 +23,7 @@ from ProgressNerf.Registries.RaypickerRegistry import get_raypicker
 from ProgressNerf.Registries.RaysamplerRegistry import get_raysampler
 from ProgressNerf.Registries.EncoderRegistry import get_encoder
 from ProgressNerf.Registries.RendererRegistry import get_renderer
+from ProgressNerf.Registries.LossRegistry import get_loss
 from ProgressNerf.Utils.CameraUtils import BuildCameraMatrix
 from ProgressNerf.Utils.FolderUtils import last_epoch_from_output_dir
 # import the supported arch dataloaders here
@@ -45,6 +46,10 @@ import ProgressNerf.Models.OGNerf
 
 # import the supported arch renderers here
 import ProgressNerf.NeuralRendering.NeuralRenderer
+
+# import the supported arch loss functions here
+import ProgressNerf.Losses.MSELoss
+import ProgressNerf.Losses.SigmaRegMSELoss
 
 # this architecture represents the original NeRF paper as proposed by Mildenhall et al.
 # see https://arxiv.org/abs/2003.08934 for further details
@@ -76,13 +81,20 @@ class OGNerfArch(object):
                 load_checkpoint_dir = ""
                 if(self.start_epoch <= 0):
                     latest_epoch = last_epoch_from_output_dir(self.base_dir)
-                    load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
-                    self.start_epoch = latest_epoch
+                    if(latest_epoch < 0):
+                        print("no previous saved data found - starting training from epoch 0")
+                        self.start_epoch = 0
+                    else:
+                        load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
+                        self.start_epoch = latest_epoch
+                        print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
+                        self.loadTrainState(load_checkpoint_dir)
+                        print("resuming training from epoch {0}...".format(self.start_epoch))
                 else:
                     load_checkpoint_dir= os.path.join(self.base_dir, "epoch_{0}".format(self.start_epoch))
-                print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
-                self.loadTrainState(load_checkpoint_dir)
-                print("resuming training from epoch {0}...".format(self.start_epoch))
+                    print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
+                    self.loadTrainState(load_checkpoint_dir)
+                    print("resuming training from epoch {0}...".format(self.start_epoch))
             else:
                 print("starting training from epoch 0...")
                 self.start_epoch = 0
@@ -148,6 +160,11 @@ class OGNerfArch(object):
         self.dir_encoder = get_encoder(dir_enc_dict['encoder'])(dir_enc_dict[dir_enc_dict['encoder']])
 
         self.renderer = get_renderer(config['renderer'])(config[config['renderer']])
+
+        train_loss_config = config['train_loss']
+        self.train_loss = get_loss(train_loss_config['loss_fn'])(train_loss_config[train_loss_config['loss_fn']])
+        test_loss_config = config['test_loss']
+        self.test_loss = get_loss(test_loss_config['loss_fn'])(test_loss_config[test_loss_config['loss_fn']])
 
         coarse_config = config['coarse_model']
         self.nn = get_model(coarse_config['nnModel'])(coarse_config[coarse_config['nnModel']])
@@ -221,6 +238,8 @@ class OGNerfArch(object):
             rendered_output_fine = self.renderer.renderRays(fine_mlp_outputs, resampled_distances)
             rendered_output['rgb'] = (rendered_output['rgb'] + rendered_output_fine['rgb']) / 2.0
             rendered_output['depth'] = (rendered_output['depth'] + rendered_output_fine['depth']) / 2.0
+            rendered_output['coarse_mlp_results'] = mlp_outputs
+            rendered_output['fine_mlp_results'] = fine_mlp_outputs
 
         return rendered_output
 
@@ -247,16 +266,20 @@ class OGNerfArch(object):
         # create the ray weights tensor based on the provided segmentation tools/parts
         # note that this is not always used by all raypickers (e.g. RandomRaypicker ignores this input)
         ray_weights = self.getSegementationWeighting(sample_batched)
-        
         # get the camera poses & run the raypicker
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
         ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
-
+        ijs_label = torch.zeros_like(train_imgs)
         render_result = self.render(ray_origins, ray_dirs)
+        # TODO: find out how to properly vectorize this indexing
+        train_pixels = torch.zeros_like(render_result['rgb'])
+        for i in range(train_pixels.shape[0]):
+            train_pixels[i] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
+            ijs_label[i, ijs[i,:,1], ijs[i,:,0], :] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
 
-        train_pixels = train_imgs[:, ijs[:,1], ijs[:,0], :]
-
-        return render_result, train_pixels
+        sigmas_coarse = render_result['coarse_mlp_results'][:,:,:,3].relu()# (batch_size, num_rays, num_samples)
+        sigmas_fine = render_result['fine_mlp_results'][:,:,:,3].relu()# (batch_size, num_rays, num_samples)
+        return render_result, train_pixels, sigmas_coarse, sigmas_fine
 
     # performs a rendering of the full image
     # unlike doTrainRendering, the raypicker is not run (except to the the totality to rays created). Instead, we
@@ -317,8 +340,6 @@ class OGNerfArch(object):
         if(self.nn_fine is not None):
             self.nn_fine.train()
             self.nn_fine.to(self.device)
-        
-        loss_rgb = torch.nn.MSELoss()
 
         # main training loop
         for epoch in tqdm(range(self.start_epoch, self.train_epochs)):
@@ -329,12 +350,13 @@ class OGNerfArch(object):
             if(self.nn_fine is not None):
                 self.nn_fine.train()
             for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader)):
-                rendered_output, train_pixels = self.doTrainRendering(sample_batched)
-                loss_rgb_i = loss_rgb(train_pixels, rendered_output['rgb'])
-                loss_rgb_i.backward()
+                rendered_output, train_pixels, coarse_sigmas, fine_sigmas = self.doTrainRendering(sample_batched)
+                sigmas = torch.cat((coarse_sigmas, fine_sigmas), dim = 2) # (batch_size, num_rays, num_coarse_samples + num_fine_samples)
+                loss = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'], sigma_vals = sigmas)
+                loss.backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-                losses.append(loss_rgb_i.item())
+                losses.append(loss.item())
             
             # compute & log metrics
             avg_mse = np.mean(losses)
@@ -352,7 +374,7 @@ class OGNerfArch(object):
                     for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
                         rendered_output, test_images = self.doTestRendering(sample_batched)
                         rgb_output = rendered_output['rgb'].contiguous().reshape((1, self.render_width, self.render_height, 3)).transpose(1,2).contiguous()
-                        loss_rgb_i_test = loss_rgb(test_images, rgb_output)
+                        loss_rgb_i_test = self.test_loss.calculateLoss(test_images, rgb_output)
                         losses_test.append(loss_rgb_i_test.item())
                         # swap dimensions since tensorboard expects shape (batches, channels, w, h)
                         # but test_images, etc. comes out as (batches, w, h, channels)
@@ -370,16 +392,13 @@ class OGNerfArch(object):
             if(not(epoch == 0) and (epoch % self.savePeriod == 0)):
                 self.saveTrainState("epoch_{0}".format(epoch))
         
-        # final end-of-training outputs
-        self.saveTrainState("final_epoch_{0}".format(self.train_epochs))
-        # Do one final test/eval after final training run
-        self.nn.eval()
+        # final end-of-training outputstest_loss
         losses_test = []
         with torch.no_grad():
             for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
                 rendered_output, test_images = self.doTestRendering(sample_batched)
                 rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
-                loss_rgb_i_test = loss_rgb(test_images, rgb_output)
+                loss_rgb_i_test = self.test_loss.calculateLoss(test_images, rgb_output)
                 losses_test.append(loss_rgb_i_test.item())
                 # swap dimensions since tensorboard expects shape (batches, channels, w, h)
                 # but test_images, etc. comes out as (batches, w, h, channels)
@@ -389,7 +408,7 @@ class OGNerfArch(object):
                 self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, self.train_epochs)
         avg_mse_test = np.mean(losses_test)
         self.tb_writer.add_scalar('test/mse', avg_mse_test, self.train_epochs)
-        tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(self.train_epochs), avg_mse, avg_mse_test)
+        tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(self.train_epochs, avg_mse, avg_mse_test))
 
 if __name__=="__main__":
     torch.manual_seed(0)

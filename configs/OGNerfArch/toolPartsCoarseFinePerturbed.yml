@@ -3,7 +3,7 @@ load_from_epoch: -1
 batch_size: 2
 num_workers: 1
 train_epochs: 15000
-testPeriod: 10
+testPeriod: 100
 save_period: 100
 device: "cuda:1"
 train_dataloader:
