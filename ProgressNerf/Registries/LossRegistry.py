@@ -10,7 +10,7 @@ class AbstractLoss(ABC):
         pass
 
     @abstractmethod
-    def calculateLoss(self, gt_pixels:torch.Tensor, rendered_pixels:torch.Tensor):
+    def calculateLoss(self, gt_pixels:torch.Tensor, rendered_pixels:torch.Tensor, **kwargs):
         pass        
 
 LOSS_REGISTRY = {}
