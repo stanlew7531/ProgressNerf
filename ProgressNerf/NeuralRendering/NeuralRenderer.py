@@ -8,7 +8,7 @@ class NeuralRenderer(AbstractRenderer):
     def __init__(self, config: Dict):
         pass
 
-    def renderRays(self, raySamples: torch.Tensor, distances: torch.Tensor):
+    def renderRays(self, raySamples: torch.Tensor, distances: torch.Tensor, **kwargs):
         '''
         raySamples: (batch_size, num_rays, num_samples, 4)
         distances: (batch_size, num_rays, num_samples)
