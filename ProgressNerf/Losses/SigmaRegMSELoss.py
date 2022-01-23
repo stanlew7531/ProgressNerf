@@ -16,4 +16,5 @@ class SigmaRegMSELoss(AbstractLoss):
     def calculateLoss(self, gt_pixels:torch.Tensor, rendered_pixels:torch.Tensor, **kwargs):
         sigmas = kwargs["sigma_vals"] # (batch_dim, height, width)
         regularization_term = self.reg_lambda * torch.mean(sigmas)
-        return self.loss_fn(gt_pixels, rendered_pixels) + regularization_term
+        mse_loss = self.loss_fn(gt_pixels, rendered_pixels)
+        return {"loss": self.loss_fn(gt_pixels, rendered_pixels) + regularization_term, "mse": mse_loss, "sigma_reg": regularization_term}

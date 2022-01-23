@@ -49,10 +49,11 @@ import ProgressNerf.NeuralRendering.NeuralRenderer
 
 # import the supported arch loss functions here
 import ProgressNerf.Losses.MSELoss
+import ProgressNerf.Losses.SigmaRegMSELoss
 
 # this architecture represents the original NeRF paper as proposed by Mildenhall et al.
 # see https://arxiv.org/abs/2003.08934 for further details
-class OGNerfArch(object):
+class MaskedSigmaRegNerfArch(object):
     def __init__(self, configFile:str) -> None:
         super().__init__()
         print("loading config at {0}".format(configFile))
@@ -142,12 +143,17 @@ class OGNerfArch(object):
 
         self.render_width = config['render_resoluion'][0]
         self.render_height = config['render_resoluion'][1]
-        self.raypicker = get_raypicker(config['raypicker'])(config[config['raypicker']])
-        self.raypicker.setCameraParameters(self.cam_matrix, self.render_height, self.render_width)
-
         self.eval_subBatchSize = config['eval_subbatch_size']
 
-        self.raysampler = get_raysampler(config['raysampler'])(config[config['raysampler']])
+        masked_ray_config = config['masked_ray_config']
+        self.masked_raypicker = get_raypicker(masked_ray_config['raypicker'])(masked_ray_config[masked_ray_config['raypicker']])
+        self.masked_raypicker.setCameraParameters(self.cam_matrix, self.render_height, self.render_width)
+        self.masked_raysampler = get_raysampler(masked_ray_config['raysampler'])(masked_ray_config[masked_ray_config['raysampler']])
+
+        reg_ray_config = config['regularizer_ray_config']
+        self.reg_raypicker = get_raypicker(reg_ray_config['raypicker'])(reg_ray_config[reg_ray_config['raypicker']])
+        self.reg_raypicker.setCameraParameters(self.cam_matrix, self.render_height, self.render_width)
+        self.reg_raysampler = get_raysampler(reg_ray_config['raysampler'])(reg_ray_config[reg_ray_config['raysampler']])
 
         self.train_epochs = config['train_epochs'] if 'train_epochs' in config.keys() else None
         self.lr = config['optim_lr'] if 'optim_lr' in config.keys() else None
@@ -170,7 +176,6 @@ class OGNerfArch(object):
 
         if('fine_model' in config.keys()):
             fine_config = config['fine_model']
-
             self.nn_fine = get_model(fine_config['nnModel'])(fine_config[fine_config['nnModel']])
             self.raysampler_fine = get_raysampler(fine_config['raysampler'])(fine_config[fine_config['raysampler']])
         else:
@@ -214,10 +219,10 @@ class OGNerfArch(object):
     # produces rgb and est depth outputs from the provided ray origins and dirs
     # ray_origins: (batch_size, num_rays, 3)
     # ray_dirs: (batch_size, num_rays, 3)
-    def render(self, ray_origins, ray_dirs):
+    def render(self, ray_origins, ray_dirs, raysampler):
         # sampled_locations: (batch_size, num_rays, num_samples, 3)
         # sampled_distances: (batch_size, num_rays, num_samples)
-        sampled_locations, sampled_distances = self.raysampler.sampleRays(ray_origins, ray_dirs)
+        sampled_locations, sampled_distances = raysampler.sampleRays(ray_origins, ray_dirs)
 
         encoded_locs = self.pos_encoder.encodeFeature(sampled_locations)
         encoded_dirs = self.dir_encoder.encodeFeature(ray_dirs)
@@ -238,7 +243,7 @@ class OGNerfArch(object):
             rendered_output['rgb'] = (rendered_output['rgb'] + rendered_output_fine['rgb']) / 2.0
             rendered_output['depth'] = (rendered_output['depth'] + rendered_output_fine['depth']) / 2.0
 
-        return rendered_output
+        return rendered_output, mlp_outputs, fine_mlp_outputs
 
     def getSegementationWeighting(self, sample_batched):
 
@@ -263,18 +268,21 @@ class OGNerfArch(object):
         # create the ray weights tensor based on the provided segmentation tools/parts
         # note that this is not always used by all raypickers (e.g. RandomRaypicker ignores this input)
         ray_weights = self.getSegementationWeighting(sample_batched)
-        # get the camera poses & run the raypicker
+        # get the camera poses & run the raypicker & rendering for the masked image
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
-        ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
+        ray_origins, ray_dirs, ijs = self.masked_raypicker.getRays(cam_poses, ray_weights = ray_weights)
+        render_result, _, _ = self.render(ray_origins, ray_dirs, self.masked_raysampler)
+        # do raypicking & rendering for the regularizing rendering
+        ray_origins, ray_dirs, ijs = self.reg_raypicker.getRays(cam_poses, ray_weights = ray_weights)
+        _, mlp_outputs, fine_mlp_outputs = self.render(ray_origins, ray_dirs, self.reg_raysampler)
+        # TODO: find out how to properly vectorize this indexing=
         ijs_label = torch.zeros_like(train_imgs)
-        render_result = self.render(ray_origins, ray_dirs)
-        # TODO: find out how to properly vectorize this indexing
         train_pixels = torch.zeros_like(render_result['rgb'])
         for i in range(train_pixels.shape[0]):
             train_pixels[i] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
             ijs_label[i, ijs[i,:,1], ijs[i,:,0], :] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
 
-        return render_result, train_pixels
+        return render_result, train_pixels, mlp_outputs[:,:,:,3].relu(), fine_mlp_outputs[:,:,:,3].relu()
 
     # performs a rendering of the full image
     # unlike doTrainRendering, the raypicker is not run (except to the the totality to rays created). Instead, we
@@ -298,7 +306,7 @@ class OGNerfArch(object):
             return rgb_output
 
     def doFullRender(self, camera_poses:torch.Tensor):
-        ray_origins, ray_dirs = self.raypicker.getAllRays(camera_poses.to(self.device)) # (batch_dim, width*height, 3), (batch_dim, width*height, 3)
+        ray_origins, ray_dirs = self.masked_raypicker.getAllRays(camera_poses.to(self.device)) # (batch_dim, width*height, 3), (batch_dim, width*height, 3)
         total_sample_size = ray_origins.shape[1]
         num_subBatches = math.ceil(total_sample_size / self.eval_subBatchSize)
         full_rendering = {}
@@ -308,7 +316,7 @@ class OGNerfArch(object):
             end_idx = min((subBatch_idx + 1) * self.eval_subBatchSize, total_sample_size)
             subBatch_ray_origins = ray_origins[:,start_idx:end_idx,:]
             subBatch_ray_dirs = ray_dirs[:,start_idx:end_idx,:]
-            subBatch_rendering = self.render(subBatch_ray_origins, subBatch_ray_dirs)
+            subBatch_rendering, _, _ = self.render(subBatch_ray_origins, subBatch_ray_dirs, self.masked_raysampler)
             if('rgb' in full_rendering.keys()):
                 full_rendering['rgb'] = torch.cat((full_rendering['rgb'], subBatch_rendering['rgb'].clone()), dim=1)
             else:
@@ -338,23 +346,29 @@ class OGNerfArch(object):
 
         # main training loop
         for epoch in tqdm(range(self.start_epoch, self.train_epochs)):
-            losses = []
-            losses_test = []
+            losses = {}
+            losses_test = {}
             # Do training step
             self.nn.train()
             if(self.nn_fine is not None):
                 self.nn_fine.train()
             for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader)):
-                rendered_output, train_pixels = self.doTrainRendering(sample_batched)
-                losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'])
+                rendered_output, train_pixels, coarse_sigmas, fine_sigmas = self.doTrainRendering(sample_batched)
+                sigmas = torch.cat((coarse_sigmas, fine_sigmas), dim=-1)
+                losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'], sigma_vals = sigmas)
                 losses_i['loss'].backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-                losses.append(losses_i['loss'].item())
+                for key in losses_i.keys():
+                    if(key in losses.keys()):
+                        losses[key].append(losses_i[key].item())
+                    else:
+                        losses[key] = list([losses_i[key].item()])
             
             # compute & log metrics
-            avg_loss = np.mean(losses)
-            self.tb_writer.add_scalar('train/mse', avg_loss, epoch)
+            for key in losses.keys():
+                avg = np.mean(losses[key])
+                self.tb_writer.add_scalar('train/{0}'.format(key), avg, epoch)
             self.optimizer.zero_grad()
 
             # if we need to do evaluation this epoch
@@ -368,47 +382,57 @@ class OGNerfArch(object):
                     for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
                         rendered_output, test_images = self.doTestRendering(sample_batched)
                         rgb_output = rendered_output['rgb'].contiguous().reshape((1, self.render_width, self.render_height, 3)).transpose(1,2).contiguous()
-                        losses = self.test_loss.calculateLoss(test_images, rgb_output)
-                        losses_test.append(losses['loss'].item())
+                        losses_i = self.test_loss.calculateLoss(test_images, rgb_output)
+                        for key in losses_i.keys():
+                            if(key in losses_test.keys()):
+                                losses_test[key].append(losses_i[key].item())
+                            else:
+                                losses_test[key] = list([losses_i[key].item()])
                         # swap dimensions since tensorboard expects shape (batches, channels, w, h)
                         # but test_images, etc. comes out as (batches, w, h, channels)
                         test_images = torch.transpose(test_images, 3, 1).transpose(2,3).contiguous()
                         rgb_output = torch.transpose(rgb_output, 3, 1).transpose(2,3).contiguous()
                         self.tb_writer.add_images("test/gtImage/{0}".format(i_batch), test_images, epoch)
                         self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, epoch)
-                avg_loss_test = np.mean(losses_test)
-                self.tb_writer.add_scalar('test/mse', avg_loss_test, epoch)
-                tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(epoch, avg_loss, avg_loss_test))
-            else:
-                tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}".format(epoch, avg_loss))
+                for key in losses_test.keys():
+                    avg = np.mean(losses_test[key])
+                    self.tb_writer.add_scalar('test/{0}'.format(key), avg, epoch)
+            #    tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(epoch, avg_loss, avg_loss_test))
+            #else:
+            #    tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}".format(epoch, avg_loss))
 
             # output the arch's data on requisite epochs
             if(not(epoch == 0) and (epoch % self.savePeriod == 0)):
                 self.saveTrainState("epoch_{0}".format(epoch))
         
         # final end-of-training outputstest_loss
-        losses_test = []
+        losses_test = {}
         with torch.no_grad():
             for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
                 rendered_output, test_images = self.doTestRendering(sample_batched)
                 rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
-                losses = self.test_loss.calculateLoss(test_images, rgb_output)
-                losses_test.append(losses['loss'].item())
+                losses_i = self.test_loss.calculateLoss(test_images, rgb_output)
+                for key in losses_i.keys():
+                    if(key in losses_test.keys()):
+                        losses_test[key].append(losses_i[key].item())
+                    else:
+                        losses_test[key] = list([losses_i[key].item()])
                 # swap dimensions since tensorboard expects shape (batches, channels, w, h)
                 # but test_images, etc. comes out as (batches, w, h, channels)
                 test_images = torch.transpose(test_images, 3, 1).transpose(2,3)
                 rgb_output = torch.transpose(rgb_output, 3, 1).transpose(2,3)
                 self.tb_writer.add_images("test/gtImage/{0}".format(i_batch), test_images, self.train_epochs)
                 self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, self.train_epochs)
-        avg_loss_test = np.mean(losses_test)
-        self.tb_writer.add_scalar('test/mse', avg_loss_test, self.train_epochs)
-        tqdm.write("Epoch: {0}, Avg RGB loss: {1:.4f}, Test Avg RGB loss: {2:.4f}".format(self.train_epochs, avg_loss, avg_loss_test))
+        for key,val in losses_test:
+            avg = np.mean(val)
+            self.tb_writer.add_scalar('test/{0}'.format(key), avg, epoch)
+        #tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(self.train_epochs, avg_loss, avg_loss_test))
 
 if __name__=="__main__":
     torch.manual_seed(0)
     np.random.seed(0)
-    configFile = "./configs/OGNerfArch/toolPartsCoarseFinePerturbed.yml"
+    configFile = "./configs/MaskedSigmaRegNerfArch/toolPartsCoarseFinePerturbed.yml"
     if(len(sys.argv) == 2):
         configFile = str(sys.argv[1])
-    arch = OGNerfArch(configFile)
+    arch = MaskedSigmaRegNerfArch(configFile)
     arch.train()

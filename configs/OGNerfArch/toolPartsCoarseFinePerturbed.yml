@@ -36,3 +36,9 @@ dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
 optim_lr: 0.001
 renderer: "neural_renderer"
 neural_renderer: {}
+train_loss:
+    loss_fn: "mse_loss"
+    mse_loss: {}
+test_loss:
+    loss_fn: "mse_loss"
+    mse_loss: {}
