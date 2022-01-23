@@ -1,9 +1,10 @@
-baseDir: "/home/stanlew/Documents/ProgressNerfModels/OGNerf/"
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/MaskedSigmaRegNerfArch_clamp_handle/"
+load_from_epoch: -1
 batch_size: 2
 num_workers: 1
-train_epochs: 15000
-testPeriod: 1000
-save_period: 1000
+train_epochs: 100
+testPeriod: 10
+save_period: 10
 device: "cuda:1"
 train_dataloader:
     dataloader: "toolsPartsDataloader"
@@ -11,12 +12,19 @@ train_dataloader:
 test_dataloader:
     dataloader: "toolsPartsDataloader"
     toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00'], datasetType: "test", samplesLimit: 5}
-desired_tool: "clamp_bottom_clamp"
-raypicker: "random_raypicker"
-random_raypicker: { num_rays: 1024}
+desired_tool: "clamp_handle"
+apply_masks: ['clamp_handle']
 eval_subbatch_size: 1024
-raysampler: "perturbed_raysampler"
-perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 100, sample_std: 0.1}
+masked_ray_config:
+    raypicker: "weighted_raypicker"
+    weighted_raypicker: { num_rays: 512}
+    raysampler: "perturbed_raysampler"
+    perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 100, sample_std: 0.1}
+regularizer_ray_config:
+    raypicker: "random_raypicker"
+    random_raypicker: { num_rays: 512}
+    raysampler: "perturbed_raysampler"
+    perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 100, sample_std: 0.1}
 camera_fx: 536.5441342081624
 camera_fy: 537.6663041098749
 camera_tx: 324.1496087846382
@@ -25,15 +33,19 @@ render_resoluion: [640,480]
 coarse_model:
     nnModel: "OGNerf"
     OGNerf: {pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
+fine_model:
+    nnModel: "OGNerf"
+    OGNerf: {pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
+    raysampler: "weighted_raysampler"
+    weighted_raysampler: {num_samples: 100}
 posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10}}
 dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
 optim_lr: 0.001
 renderer: "neural_renderer"
 neural_renderer: {}
-
 train_loss:
-    loss_fn: "mse_loss"
-    mse_loss: {}
+    loss_fn: "mse_loss_sigma_regularized"
+    mse_loss_sigma_regularized: {sigma_regularization_term: 0.01}
 test_loss:
     loss_fn: "mse_loss"
     mse_loss: {}

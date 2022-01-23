@@ -9,4 +9,4 @@ class MSELoss(AbstractLoss):
         self.loss_fn = torch.nn.MSELoss()
     
     def calculateLoss(self, gt_pixels:torch.Tensor, rendered_pixels:torch.Tensor, **kwargs):
-        return self.loss_fn(gt_pixels, rendered_pixels)
+        return {"loss": self.loss_fn(gt_pixels, rendered_pixels)}
