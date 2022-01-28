@@ -14,8 +14,27 @@ class VoxelGrid(object):
         self.axesLengths = self.shape * voxelSize
         self.voxels = torch.zeros((self.shape[0].item(),self.shape[1].item(),self.shape[2].item(),stored_data_size), device=axesMinMax.device)
 
+    def save(self, file_path:str):
+        previous_device = self.voxels.device
+        self.to("cpu")
+        to_write_dict = {'voxel_size': self.voxelSize, 'volume_bounds': self.volume_bounds, 'voxel_data': self.voxels}
+        torch.save(to_write_dict, file_path)
+        self.to(previous_device)
+
+    @staticmethod
+    def load(file_path:str):
+        saved_dict = torch.load(file_path)
+        voxel_size = saved_dict['voxel_size']
+        volume_bounds = saved_dict['volume_bounds']
+        voxel_data = saved_dict['voxel_data']
+        toReturn = VoxelGrid(volume_bounds, voxel_size, voxel_data.shape[-1])
+        toReturn.voxels = voxel_data
+
+        return toReturn
+
     def to(self, dvc:torch.device):
         self.axesLengths = self.axesLengths.to(dvc)
+        self.volume_bounds = self.volume_bounds.to(dvc)
         self.shape = self.shape.to(dvc)
         self.voxels = self.voxels.to(dvc)
 
@@ -53,11 +72,10 @@ class VoxelGrid(object):
 
     
     def subdivideGrid(self):
-        start_size = self.voxels.shape
         self.voxels = self.voxels.repeat_interleave(2, dim = 0)\
             .repeat_interleave(2, dim = 1)\
                 .repeat_interleave(2, dim = 2)
 
         self.voxelSize = self.voxelSize * 0.5
-        self.shape = self.voxels.shape
+        self.shape = self.shape * 2
 

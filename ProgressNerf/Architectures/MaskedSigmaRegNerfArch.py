@@ -232,7 +232,7 @@ class MaskedSigmaRegNerfArch(object):
         rendered_output = self.renderer.renderRays(mlp_outputs, sampled_distances)
 
         if(self.nn_fine is not None):
-            weighted_resampling_other_info = {'distances': sampled_distances, 'sigmas': mlp_outputs[:,:,:,3].relu()}
+            weighted_resampling_other_info = {'distances': sampled_distances, 'sigmas': mlp_outputs[:,:,:,3]}
             _, resampled_distances = self.raysampler_fine.sampleRays(ray_origins, ray_dirs, other_info=weighted_resampling_other_info)
             resampled_distances, _ = torch.cat((sampled_distances, resampled_distances), dim = -1).sort()
             resampled_locations = ray_origins[...,None,:] + ray_dirs[..., None, :] * resampled_distances[...,:,None]
@@ -282,7 +282,7 @@ class MaskedSigmaRegNerfArch(object):
             train_pixels[i] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
             ijs_label[i, ijs[i,:,1], ijs[i,:,0], :] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
 
-        return render_result, train_pixels, mlp_outputs[:,:,:,3].relu(), fine_mlp_outputs[:,:,:,3].relu()
+        return render_result, train_pixels, mlp_outputs[:,:,:,3], fine_mlp_outputs[:,:,:,3]
 
     # performs a rendering of the full image
     # unlike doTrainRendering, the raypicker is not run (except to the the totality to rays created). Instead, we

@@ -10,7 +10,7 @@ from os.path import exists
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from typing import Dict
 from re import L, S
 import sys
@@ -87,12 +87,13 @@ class VoxelGridNerf(object):
                         self.start_epoch = 0
                     else:
                         load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
-                        self.start_epoch = latest_epoch
+                        self.start_epoch = latest_epoch + 1
                         print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
                         self.loadTrainState(load_checkpoint_dir)
                         print("resuming training from epoch {0}...".format(self.start_epoch))
                 else:
                     load_checkpoint_dir= os.path.join(self.base_dir, "epoch_{0}".format(self.start_epoch))
+                    self.start_epoch = self.start_epoch + 1
                     print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
                     self.loadTrainState(load_checkpoint_dir)
                     print("resuming training from epoch {0}...".format(self.start_epoch))
@@ -165,6 +166,11 @@ class VoxelGridNerf(object):
         voxel_size = float(config['init_voxel_size'])
         self.voxel_grid = VoxelGrid(axes_min_max, voxel_size, 1)
         self.voxel_grid.voxels = self.voxel_grid.voxels + 1. # mark all voxels as occupied to start with
+        # schedule for reducing the voxel grid size and for pruning as necessary
+        self.voxel_halving_schedule = [int(val) for val in config['half_voxels_schedule']]
+        self.prune_voxels_schedule = [int(val) for val in config['prune_voxels_schedule']]
+        self.prune_voxels_sample_count = int(config['prune_voxels_sample_count'])
+        self.prune_voxels_gamma = float(config['prune_voxels_gamma'])
 
         self.renderer = get_renderer(config['renderer'])(config[config['renderer']])
 
@@ -205,17 +211,22 @@ class VoxelGridNerf(object):
         if(self.nn_fine is not None):
             torch.save(self.nn_fine.state_dict(), os.path.join(output_dir, "mlp_dict_fine.ptr"))
         torch.save(self.optimizer.state_dict(), os.path.join(output_dir, "optimizer_dict.ptr"))
+        self.voxel_grid.save(os.path.join(output_dir, "voxel_grid.ptr"))
 
     def loadNNModels(self, checkpoint_dir:str = "latest"):
         input_dir = os.path.join(self.base_dir, checkpoint_dir)
         self.nn.load_state_dict(torch.load(os.path.join(input_dir, "mlp_dict.ptr")))
         if(self.nn_fine is not None):
             self.nn_fine.load_state_dict(torch.load(os.path.join(input_dir,"mlp_dict_fine.ptr")))
+        self.nn = self.nn.to(self.device)
+        self.nn_fine = self.nn.to(self.device)
 
     def loadTrainState(self, checkpoint_dir:str = "latest"):
         input_dir = os.path.join(self.base_dir, checkpoint_dir)
         self.loadNNModels(checkpoint_dir)
         self.optimizer.load_state_dict(torch.load(os.path.join(input_dir, "optimizer_dict.ptr")))
+        self.voxel_grid = VoxelGrid.load(os.path.join(checkpoint_dir, "voxel_grid.ptr"))
+        self.voxel_grid.to(self.device)
 
     # performs the per-ray sampling and final rendering
     # this is where the raysampler is called, as well as the renderer
@@ -235,7 +246,7 @@ class VoxelGridNerf(object):
         rendered_output = self.renderer.renderRays(mlp_outputs, sampled_distances, voxels=self.voxel_grid, sample_locations=sampled_locations)
 
         if(self.nn_fine is not None):
-            weighted_resampling_other_info = {'distances': sampled_distances, 'sigmas': mlp_outputs[:,:,:,3].relu()}
+            weighted_resampling_other_info = {'distances': sampled_distances, 'sigmas': mlp_outputs[:,:,:,3]}
             _, resampled_distances = self.raysampler_fine.sampleRays(ray_origins, ray_dirs, other_info=weighted_resampling_other_info)
             resampled_distances, _ = torch.cat((sampled_distances, resampled_distances), dim = -1).sort()
             resampled_locations = ray_origins[...,None,:] + ray_dirs[..., None, :] * resampled_distances[...,:,None]
@@ -249,7 +260,6 @@ class VoxelGridNerf(object):
         return rendered_output
 
     def getSegementationWeighting(self, sample_batched):
-
         segmentation_img = sample_batched['segmentation'].to(self.device) # (batch_size, W, H)
 
         # create the ray weights tensor based on the provided segmentation tools/parts
@@ -262,6 +272,56 @@ class VoxelGridNerf(object):
                     ray_weights[batch_idx] = torch.logical_or(ray_weights[batch_idx], segmentation_img[batch_idx] == mask_seg_label[batch_idx])
 
         return ray_weights
+
+    def doVoxelPruning(self):
+        self.nn.eval()
+        if(self.nn_fine is not None):
+            self.nn_fine.eval()
+        with torch.no_grad():
+            sizes = self.voxel_grid.shape
+            bbox_bounds = self.voxel_grid.volume_bounds
+            voxel_size = self.voxel_grid.voxelSize
+
+            random_samples = torch.rand((self.prune_voxels_sample_count, 6)) # (sample_count, 6) -> final dim will be (x,y,z,view_x, view_y, view_z)
+            random_samples[:, 0:3] = random_samples[:, 0:3] * voxel_size # scale x,y,z to fit inside a voxel
+            random_samples[:, 3:] = random_samples[:, 3:] / torch.linalg.norm(random_samples[:, 3:], dim = 1).unsqueeze(-1).repeat(1,3) # norm all of the ray_dirs to be length 1
+
+            random_samples = random_samples.to(self.device)
+            offset = torch.Tensor([0.0,0.0,0.0]).to(self.device)
+
+            total_voxels = sizes[0] * sizes[1] * sizes[2]
+            pruned_voxels = 0
+            occ_voxels = 0
+            min_vals = torch.zeros_like(self.voxel_grid.voxels)
+
+            # TODO: make this vectorized
+            for x_idx in tqdm(range(sizes[0]), leave = False):
+                offset[0] = x_idx * voxel_size + bbox_bounds[0,0]
+                for y_idx in tqdm(range(sizes[1]), leave = False):
+                    offset[1] = y_idx * voxel_size + bbox_bounds[0,1]
+                    for z_idx in tqdm(range(sizes[2]), leave = False):
+                        # only test if not already pruned
+                        if(self.voxel_grid[x_idx, y_idx, z_idx,0] > 0.0):
+                            offset[2] = z_idx * voxel_size + bbox_bounds[0,2]
+                            occ_voxels = occ_voxels + 1
+                            # note - unsqueezes are just to make the nn.forward play nice
+                            encoded_locs = self.pos_encoder.encodeFeature(random_samples[:, 0:3] + offset[None, :]).unsqueeze(0).unsqueeze(0) #(1, 1, prune_voxels_sample_count, N_feature_encodings)
+                            encoded_dirs_coarse = self.dir_encoder.encodeFeature(random_samples[:, 3:]).unsqueeze(0).unsqueeze(0) #(1, 1, prune_voxels_sample_count, N_feature_encodings)
+                            if(self.nn_fine is not None):
+                                mlp_outputs = self.nn_fine.forward(encoded_locs, encoded_dirs_coarse) #(1, 1, prune_voxels_sample_count, 4)
+                            else:
+                                mlp_outputs = self.nn.forward(encoded_locs, encoded_dirs_coarse) #(1, 1, prune_voxels_sample_count, 4)
+                            sigmas = mlp_outputs[:,:,:,3]
+                            pruning_vals = torch.exp(-1 * sigmas)
+                            min_val = torch.min(pruning_vals)
+                            min_vals[x_idx, y_idx, z_idx] = min_val
+                            # condition under which to prune voxels
+                            if(min_val > self.prune_voxels_gamma):
+                                self.voxel_grid[x_idx, y_idx, z_idx,0] = 0.0
+                                pruned_voxels =  pruned_voxels + 1
+            
+            tqdm.write("Done pruning voxels. Original voxel count: {0}, orig occupied voxel count: {1}, total count pruned: {2}".format(total_voxels, occ_voxels, pruned_voxels))
+
 
     # performs the ray picking step and sends the results to the renderer
     # this is where the raypicker is called
@@ -340,19 +400,31 @@ class VoxelGridNerf(object):
         # set the main models to train, move the GPU if necessary, and extract the optimization parameters
         self.nn.train()
         self.nn.to(self.device)
+        self.voxel_grid.to(self.device)
         if(self.nn_fine is not None):
             self.nn_fine.train()
             self.nn_fine.to(self.device)
+            self.nn_fine.to(self.device)
 
         # main training loop
-        for epoch in tqdm(range(self.start_epoch, self.train_epochs)):
-            losses = []
-            losses_test = []
+        for epoch in tqdm(range(self.start_epoch, self.train_epochs), leave = True):
+
+            # if needed, half voxels
+            if(epoch in self.voxel_halving_schedule):
+                tqdm.write("Halving voxel sizes on epoch {0}".format(epoch))
+                self.voxel_grid.subdivideGrid()
+
+            # if needed, prune empty voxels
+            if(epoch in self.prune_voxels_schedule):
+                tqdm.write("Pruning voxel sizes on epoch {0}".format(epoch))
+                self.doVoxelPruning()
+
             # Do training step
+            losses = []
             self.nn.train()
             if(self.nn_fine is not None):
                 self.nn_fine.train()
-            for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader)):
+            for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader), leave = False):
                 rendered_output, train_pixels = self.doTrainRendering(sample_batched)
                 losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'])
                 losses_i['loss'].backward()
@@ -372,16 +444,17 @@ class VoxelGridNerf(object):
                 if(self.nn_fine is not None):
                     self.nn_fine.eval()
                 # render the entire image instead of only the sampled pixels, compute loss & send to tensorboard
+                losses_test = []
                 with torch.no_grad():
-                    for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
+                    for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader), leave = False):
                         rendered_output, test_images = self.doTestRendering(sample_batched)
-                        rgb_output = rendered_output['rgb'].contiguous().reshape((1, self.render_width, self.render_height, 3)).transpose(1,2).contiguous()
+                        rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
                         losses = self.test_loss.calculateLoss(test_images, rgb_output)
                         losses_test.append(losses['loss'].item())
                         # swap dimensions since tensorboard expects shape (batches, channels, w, h)
                         # but test_images, etc. comes out as (batches, w, h, channels)
-                        test_images = torch.transpose(test_images, 3, 1).transpose(2,3).contiguous()
-                        rgb_output = torch.transpose(rgb_output, 3, 1).transpose(2,3).contiguous()
+                        test_images = torch.transpose(test_images, 3, 1).transpose(2,3)
+                        rgb_output = torch.transpose(rgb_output, 3, 1).transpose(2,3)
                         self.tb_writer.add_images("test/gtImage/{0}".format(i_batch), test_images, epoch)
                         self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, epoch)
                 avg_loss_test = np.mean(losses_test)
@@ -394,10 +467,10 @@ class VoxelGridNerf(object):
             if(not(epoch == 0) and (epoch % self.savePeriod == 0)):
                 self.saveTrainState("epoch_{0}".format(epoch))
         
-        # final end-of-training outputstest_loss
+        # final end-of-training outputs test_loss
         losses_test = []
         with torch.no_grad():
-            for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
+            for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader), leave = True):
                 rendered_output, test_images = self.doTestRendering(sample_batched)
                 rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
                 losses = self.test_loss.calculateLoss(test_images, rgb_output)
@@ -410,11 +483,12 @@ class VoxelGridNerf(object):
                 self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, self.train_epochs)
         avg_loss_test = np.mean(losses_test)
         self.tb_writer.add_scalar('test/mse', avg_loss_test, self.train_epochs)
-        tqdm.write("Epoch: {0}, Avg RGB loss: {1:.4f}, Test Avg RGB loss: {2:.4f}".format(self.train_epochs, avg_loss, avg_loss_test))
+        tqdm.write("Epoch: {0}, Test Avg RGB loss: {2:.4f}".format(self.train_epochs, avg_loss_test))
+        self.saveTrainState("epoch_{0}".format(self.train_epochs))
 
 if __name__=="__main__":
-    torch.manual_seed(0)
-    np.random.seed(0)
+    torch.manual_seed(42)
+    np.random.seed(42)
     configFile = "./configs/VoxelGridNerf/toolPartsCoarseFinePerturbedMasked.yml"
     if(len(sys.argv) == 2):
         configFile = str(sys.argv[1])

@@ -22,15 +22,17 @@ class NeuralRenderer(AbstractRenderer):
         deltas = torch.cat([deltas, dist_far], dim=2)  # (batch_size, num_rays, num_samples)
 
         rgb_samples = raySamples[:,:,:,0:3] # (batch_size, num_rays, num_samples, 3)
-        sigmas = raySamples[:,:,:,3].relu() # (batch_size, num_rays, num_samples, 1)
+        sigmas = raySamples[:,:,:,3] # (batch_size, num_rays, num_samples, 1)
+
         alphas = 1 - torch.exp(-1.0 * sigmas * deltas) # (batch_size, num_rays, num_samples)
 
         Tis = torch.roll(torch.exp(-1 * torch.cumsum(input=(sigmas * deltas), dim = 2)), shifts=1, dims=2) # (batch_size, num_rays, num_samples)
         Tis[:,:,0] = 1.0 # (batch_size, num_rays, num_samples)
 
         weights = alphas * Tis # (batch_size, num_rays, num_samples)
-        
+
         rgb_rendered = torch.sum(weights.unsqueeze(3) * rgb_samples, dim=2).sigmoid() # (batch_size, num_rays, 3)
+
         depth_rendered = torch.sum(weights * distances, dim=2)  # (batch_size, num_rays)
 
         render_result = {

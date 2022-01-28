@@ -1,27 +1,27 @@
-baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampHandle/"
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampHandle_test3/"
 load_from_epoch: -1
 batch_size: 2
 num_workers: 1
-train_epochs: 100
+train_epochs: 300
 testPeriod: 10
 save_period: 10
 device: "cuda:1"
 
 train_dataloader:
     dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00'], datasetType: "train", samplesLimit: -1}
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','00_01','00_02','00_03','00_04','01','01_01','01_02','01_03','02', '02_01', '03'], datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_handle']}
 test_dataloader:
     dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00'], datasetType: "test", samplesLimit: 5}
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','00_01','00_02','00_03','00_04','01','01_01','01_02','01_03','02', '02_01', '03'], datasetType: "test", samplesLimit: 5, rel_tools: ['clamp_handle']}
 
 desired_tool: "clamp_handle"
 apply_masks: ['clamp_handle']
 eval_subbatch_size: 1024
 
 raypicker: "weighted_raypicker"
-weighted_raypicker: { num_rays: 512}
+weighted_raypicker: { num_rays: 256}
 raysampler: "perturbed_raysampler"
-perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 100, sample_std: 0.1}
+perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 256, sample_std: 0.001}
 
 camera_fx: 536.5441342081624
 camera_fy: 537.6663041098749
@@ -30,17 +30,23 @@ camera_ty: 224.2990274169881
 render_resoluion: [640,480]
 coarse_model:
     nnModel: "OGNerf"
-    OGNerf: {pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
+    OGNerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
 fine_model:
     nnModel: "OGNerf"
-    OGNerf: {pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
+    OGNerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
     raysampler: "weighted_raysampler"
-    weighted_raysampler: {num_samples: 100}
-posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10}}
+    weighted_raysampler: {num_samples: 256}
+posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10, includeOrig: True}}
 dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
 optim_lr: 0.001
+
 init_voxel_size: 0.01
-boundary_min_maxes: [-.1, -.1, -.015, .1, .1, .015]
+half_voxels_schedule: [50]
+prune_voxels_schedule: [66, 100, 133, 166, 200, 233, 266]
+prune_voxels_sample_count: 16000
+prune_voxels_gamma: 0.5
+
+boundary_min_maxes: [-.2, -.2, -.2, .2, .2, .2]
 renderer: "voxel_neural_renderer"
 voxel_neural_renderer: {}
 train_loss:
