@@ -70,6 +70,7 @@ class ToolsPartsDataloader(torch.utils.data.Dataset):
 
         img_data = np.ascontiguousarray(cv.imread(img_file, cv.IMREAD_COLOR)[:,:,::-1]) / 255.0 # swap from BGR to RGB and normalize
         depth_data = np.int32(cv.imread(depth_file, cv.IMREAD_UNCHANGED)) # convert to int32 so that from_numpy works below
+        depth_data = np.float64(depth_data)/1000.0
         pose_data = yaml.load(open(pose_file,'r'), yaml.FullLoader)
         seg_data = cv.imread(seg_file, cv.IMREAD_UNCHANGED)
 

@@ -13,6 +13,7 @@ class VoxelGrid(object):
         # update the axes length to reflect the increased volume from the ceil operation
         self.axesLengths = self.shape * voxelSize
         self.voxels = torch.zeros((self.shape[0].item(),self.shape[1].item(),self.shape[2].item(),stored_data_size), device=axesMinMax.device)
+        self.shape = torch.cat((self.shape, torch.Tensor([stored_data_size]).to(device=self.shape.device))) #update with the stored_data_size
 
     def save(self, file_path:str):
         previous_device = self.voxels.device
@@ -51,10 +52,13 @@ class VoxelGrid(object):
     def size(self, dim=None):
         return self.voxels.size(dim)
 
+    def get_voxel_locs(self, xyz_locations:torch.Tensor):
+        return torch.floor((xyz_locations[:] - self.volume_bounds[0,:]) / self.voxelSize).to(torch.long)
+
     # xyz_locations: (N, 3) 3d locations to get the voxel values for
     # returns: (N, stored_data_size)
     def get_voxels_xyz(self, xyz_locations:torch.Tensor):
-        voxel_locations = torch.floor((xyz_locations[:] - self.volume_bounds[0,:]) / self.voxelSize).to(torch.long)
+        voxel_locations = self.get_voxel_locs(xyz_locations) #torch.floor((xyz_locations[:] - self.volume_bounds[0,:]) / self.voxelSize).to(torch.long)
         return self[voxel_locations[:,0], voxel_locations[:,1], voxel_locations[:,2]]
 
     # xyz_locations: (N, 3) 3d locations to get the voxel values for
@@ -66,7 +70,7 @@ class VoxelGrid(object):
     # xyz_locations: (N, 3) 3d locations to determine if they are inside the top level bounding box
     def are_voxels_xyz_in_bounds(self, xyz_locations:torch.Tensor):
         voxel_locations = torch.floor((xyz_locations[:] - self.volume_bounds[0,:]) / self.voxelSize).to(torch.long)
-        is_in_bounds = torch.all(torch.logical_and(voxel_locations >= torch.zeros(3,device = self.voxels.device), voxel_locations < self.shape), dim = -1) # (N)
+        is_in_bounds = torch.all(torch.logical_and(voxel_locations >= torch.zeros(3,device = self.voxels.device), voxel_locations < self.shape[0:3]), dim = -1) # (N)
         #in_bound_voxels = voxel_locations[is_in_bounds].reshape((int(is_in_bounds.shape[0] / 3), int(3)))
         return is_in_bounds
 
@@ -77,5 +81,5 @@ class VoxelGrid(object):
                 .repeat_interleave(2, dim = 2)
 
         self.voxelSize = self.voxelSize * 0.5
-        self.shape = self.shape * 2
+        self.shape[0:3] = self.shape[0:3] * 2
 

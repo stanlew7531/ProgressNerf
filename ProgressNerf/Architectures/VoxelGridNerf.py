@@ -50,6 +50,7 @@ import ProgressNerf.NeuralRendering.VoxelNeuralRenderer
 
 # import the supported arch loss functions here
 import ProgressNerf.Losses.MSELoss
+import ProgressNerf.Losses.MSE_DepthLoss
 from ProgressNerf.Utils.VoxelGrid import VoxelGrid
 
 # this architecture represents the original NeRF paper as proposed by Mildenhall et al.
@@ -164,7 +165,7 @@ class VoxelGridNerf(object):
         # create a voxel grid that only stores 1 axes (e.g. is voxel occupied or not)
         axes_min_max = torch.Tensor([float(val) for val in config['boundary_min_maxes']]).reshape((2,3)).to(dtype=torch.float64, device=self.device)
         voxel_size = float(config['init_voxel_size'])
-        self.voxel_grid = VoxelGrid(axes_min_max, voxel_size, 1)
+        self.voxel_grid = VoxelGrid(axes_min_max, voxel_size, 2)
         self.voxel_grid.voxels = self.voxel_grid.voxels + 1. # mark all voxels as occupied to start with
         # schedule for reducing the voxel grid size and for pruning as necessary
         self.voxel_halving_schedule = [int(val) for val in config['half_voxels_schedule']]
@@ -233,7 +234,7 @@ class VoxelGridNerf(object):
     # produces rgb and est depth outputs from the provided ray origins and dirs
     # ray_origins: (batch_size, num_rays, 3)
     # ray_dirs: (batch_size, num_rays, 3)
-    def render(self, ray_origins, ray_dirs):
+    def render(self, ray_origins, ray_dirs, mark_visited_voxels = False):
         # sampled_locations: (batch_size, num_rays, num_samples, 3)
         # sampled_distances: (batch_size, num_rays, num_samples)
         sampled_locations, sampled_distances = self.raysampler.sampleRays(ray_origins, ray_dirs)
@@ -243,6 +244,13 @@ class VoxelGridNerf(object):
         encoded_dirs_coarse = encoded_dirs.unsqueeze(2).repeat(1,1,encoded_locs.shape[2],1)
         
         mlp_outputs = self.nn.forward(encoded_locs, encoded_dirs_coarse) #(batch_size, num_rays, num_samples, 4)
+
+        if(mark_visited_voxels):
+            in_bounds_results = self.voxel_grid.are_voxels_xyz_in_bounds(sampled_locations) # (batch_size * num_rays * num_samples)
+            voxel_vals = self.voxel_grid.get_voxels_xyz(sampled_locations[in_bounds_results, :])
+            voxel_vals[:, 1] = voxel_vals[:, 1] * 0.95 # update the 'non-visited' prior
+            self.voxel_grid.set_voxels_xyz(sampled_locations[in_bounds_results, :], voxel_vals)
+
         rendered_output = self.renderer.renderRays(mlp_outputs, sampled_distances, voxels=self.voxel_grid, sample_locations=sampled_locations)
 
         if(self.nn_fine is not None):
@@ -278,7 +286,7 @@ class VoxelGridNerf(object):
         if(self.nn_fine is not None):
             self.nn_fine.eval()
         with torch.no_grad():
-            sizes = self.voxel_grid.shape
+            sizes = self.voxel_grid.shape.to(dtype=torch.int)
             bbox_bounds = self.voxel_grid.volume_bounds
             voxel_size = self.voxel_grid.voxelSize
 
@@ -291,6 +299,7 @@ class VoxelGridNerf(object):
 
             total_voxels = sizes[0] * sizes[1] * sizes[2]
             pruned_voxels = 0
+            pruned_no_visit = 0
             occ_voxels = 0
             min_vals = torch.zeros_like(self.voxel_grid.voxels)
 
@@ -319,8 +328,13 @@ class VoxelGridNerf(object):
                             if(min_val > self.prune_voxels_gamma):
                                 self.voxel_grid[x_idx, y_idx, z_idx,0] = 0.0
                                 pruned_voxels =  pruned_voxels + 1
+                            # prune if we never visited this location
+                            if(self.voxel_grid[x_idx, y_idx, z_idx,1] >= 0.9):
+                                self.voxel_grid[x_idx, y_idx, z_idx,0] = 0.0
+                                pruned_no_visit =  pruned_no_visit + 1
+
             
-            tqdm.write("Done pruning voxels. Original voxel count: {0}, orig occupied voxel count: {1}, total count pruned: {2}".format(total_voxels, occ_voxels, pruned_voxels))
+            tqdm.write("Done pruning voxels. Original voxel count: {0}, orig occupied voxel count: {1}, sigma pruned: {2}, no visit pruned: {3}".format(total_voxels, occ_voxels, pruned_voxels, pruned_no_visit))
 
 
     # performs the ray picking step and sends the results to the renderer
@@ -335,23 +349,25 @@ class VoxelGridNerf(object):
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
         ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
         ijs_label = torch.zeros_like(train_imgs)
-        render_result = self.render(ray_origins, ray_dirs)
+        render_result = self.render(ray_origins, ray_dirs, mark_visited_voxels=True)
         # TODO: find out how to properly vectorize this indexing
         train_pixels = torch.zeros_like(render_result['rgb'])
+        train_pixel_depths = torch.zeros_like(render_result['depth'])
         for i in range(train_pixels.shape[0]):
             train_pixels[i] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
+            train_pixel_depths[i] = train_depths[i, ijs[i,:,1], ijs[i,:,0]]
             ijs_label[i, ijs[i,:,1], ijs[i,:,0], :] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
-
-        return render_result, train_pixels
+        return render_result, train_pixels, train_pixel_depths.unsqueeze(-1)
 
     # performs a rendering of the full image
     # unlike doTrainRendering, the raypicker is not run (except to the the totality to rays created). Instead, we
     # extract sub-batches of all rays for rendering to prevent out-of-memory issues
     def doTestRendering(self, sample_batched):
         test_imgs = sample_batched['image'].to(self.device) # (batch_size, W, H, 3)
+        test_depths = sample_batched['depth'].to(self.device).unsqueeze(-1) # (batch_size, W, H, 3)
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
         full_rendering = self.doFullRender(cam_poses)
-        return full_rendering, test_imgs
+        return full_rendering, test_imgs, test_depths
 
     # performs a rendering at an arbitrary camera pose for the entire image.
     # this method has no dependency on the underlying dataloader, so it can be called in applications
@@ -381,6 +397,11 @@ class VoxelGridNerf(object):
                 full_rendering['rgb'] = torch.cat((full_rendering['rgb'], subBatch_rendering['rgb'].clone()), dim=1)
             else:
                 full_rendering['rgb'] = subBatch_rendering['rgb'].clone()
+
+            if('depth' in full_rendering.keys()):
+                full_rendering['depth'] = torch.cat((full_rendering['depth'], subBatch_rendering['depth'].clone()), dim=1)
+            else:
+                full_rendering['depth'] = subBatch_rendering['depth'].clone()
 
         return full_rendering
 
@@ -420,21 +441,31 @@ class VoxelGridNerf(object):
                 self.doVoxelPruning()
 
             # Do training step
-            losses = []
+            losses = {}
             self.nn.train()
+
+            outputString = "Epoch:{0}".format(epoch)
             if(self.nn_fine is not None):
                 self.nn_fine.train()
             for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader), leave = False):
-                rendered_output, train_pixels = self.doTrainRendering(sample_batched)
-                losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'])
+                rendered_output, train_pixels, train_depths = self.doTrainRendering(sample_batched)
+                losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'], rendered_depths=rendered_output["depth"].unsqueeze(-1), gt_depths=train_depths)
                 losses_i['loss'].backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-                losses.append(losses_i['loss'].item())
+                for key in losses_i.keys():
+                    if(key in losses.keys()):
+                        losses[key].append(losses_i[key].item())
+                    else:
+                        losses[key] = list([losses_i[key].item()])
             
             # compute & log metrics
-            avg_loss = np.mean(losses)
-            self.tb_writer.add_scalar('train/mse', avg_loss, epoch)
+            for key in losses.keys():
+                avg = np.mean(losses[key])
+                self.tb_writer.add_scalar('train/{0}'.format(key), avg, epoch)
+                outputString = outputString + ' train/{0}:{1:.4f}'.format(key,avg)
+            #avg_loss = np.mean(losses)
+            #self.tb_writer.add_scalar('train/mse', avg_loss, epoch)
             self.optimizer.zero_grad()
 
             # if we need to do evaluation this epoch
@@ -444,46 +475,63 @@ class VoxelGridNerf(object):
                 if(self.nn_fine is not None):
                     self.nn_fine.eval()
                 # render the entire image instead of only the sampled pixels, compute loss & send to tensorboard
-                losses_test = []
+                losses_test = {}
                 with torch.no_grad():
                     for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader), leave = False):
-                        rendered_output, test_images = self.doTestRendering(sample_batched)
+                        rendered_output, test_images, test_depths = self.doTestRendering(sample_batched)
                         rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
-                        losses = self.test_loss.calculateLoss(test_images, rgb_output)
-                        losses_test.append(losses['loss'].item())
+                        depth_output = rendered_output['depth'].reshape((1, self.render_width, self.render_height, 1)).transpose(1,2)
+                        losses = self.test_loss.calculateLoss(test_images, rgb_output, rendered_depths=depth_output, gt_depths=test_depths)
+                        for key in losses_i.keys():
+                            if(key in losses_test.keys()):
+                                losses_test[key].append(losses_i[key].item())
+                            else:
+                                losses_test[key] = list([losses_i[key].item()])
                         # swap dimensions since tensorboard expects shape (batches, channels, w, h)
                         # but test_images, etc. comes out as (batches, w, h, channels)
                         test_images = torch.transpose(test_images, 3, 1).transpose(2,3)
                         rgb_output = torch.transpose(rgb_output, 3, 1).transpose(2,3)
                         self.tb_writer.add_images("test/gtImage/{0}".format(i_batch), test_images, epoch)
                         self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, epoch)
-                avg_loss_test = np.mean(losses_test)
-                self.tb_writer.add_scalar('test/mse', avg_loss_test, epoch)
-                tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(epoch, avg_loss, avg_loss_test))
-            else:
-                tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}".format(epoch, avg_loss))
-
+                for key in losses_test.keys():
+                    avg = np.mean(losses_test[key])
+                    self.tb_writer.add_scalar('test/{0}'.format(key), avg, epoch)
+                    outputString = outputString + ' test/{0}:{1:.4f}'.format(key,avg)
+                #avg_loss_test = np.mean(losses_test)
+                #self.tb_writer.add_scalar('test/mse', avg_loss_test, epoch)
+                #tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(epoch, avg_loss, avg_loss_test))
+            #else:
+                #tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}".format(epoch, avg_loss))
+            tqdm.write(outputString)
             # output the arch's data on requisite epochs
             if(not(epoch == 0) and (epoch % self.savePeriod == 0)):
                 self.saveTrainState("epoch_{0}".format(epoch))
         
         # final end-of-training outputs test_loss
-        losses_test = []
+        losses_test = {}
         with torch.no_grad():
             for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader), leave = True):
-                rendered_output, test_images = self.doTestRendering(sample_batched)
+                rendered_output, test_images, test_depths = self.doTestRendering(sample_batched)
                 rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
-                losses = self.test_loss.calculateLoss(test_images, rgb_output)
-                losses_test.append(losses['loss'].item())
+                depth_output = rendered_output['depth'].reshape((1, self.render_width, self.render_height, 1)).transpose(1,2)
+                losses = self.test_loss.calculateLoss(test_images, rgb_output, rendered_depths=depth_output, gt_depths=test_depths)
+                for key in losses_i.keys():
+                    if(key in losses_test.keys()):
+                        losses_test[key].append(losses_i[key].item())
+                    else:
+                        losses_test[key] = list([losses_i[key].item()])
                 # swap dimensions since tensorboard expects shape (batches, channels, w, h)
                 # but test_images, etc. comes out as (batches, w, h, channels)
                 test_images = torch.transpose(test_images, 3, 1).transpose(2,3)
                 rgb_output = torch.transpose(rgb_output, 3, 1).transpose(2,3)
                 self.tb_writer.add_images("test/gtImage/{0}".format(i_batch), test_images, self.train_epochs)
                 self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, self.train_epochs)
-        avg_loss_test = np.mean(losses_test)
-        self.tb_writer.add_scalar('test/mse', avg_loss_test, self.train_epochs)
-        tqdm.write("Epoch: {0}, Test Avg RGB loss: {2:.4f}".format(self.train_epochs, avg_loss_test))
+        outputString = "Epoch:{0}".format(self.train_epochs)
+        for key in losses_test.keys():
+            avg = np.mean(losses_test[key])
+            self.tb_writer.add_scalar('test/{0}'.format(key), avg, epoch)
+            outputString = outputString + ' test/{0}:{1:.4f}'.format(key,avg)
+        tqdm.write(outputString)
         self.saveTrainState("epoch_{0}".format(self.train_epochs))
 
 if __name__=="__main__":

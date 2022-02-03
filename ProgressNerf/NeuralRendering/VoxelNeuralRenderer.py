@@ -27,7 +27,10 @@ class VoxelNeuralRenderer(AbstractRenderer):
         sample_locs = sample_locs.reshape((batch_size * num_rays * num_samples, 3))
         in_bounds_results = voxel_grid.are_voxels_xyz_in_bounds(sample_locs) # (batch_size * num_rays * num_samples)
         occupied_results = in_bounds_results.clone()
-        if(torch.any(occupied_results).item()):
-            occupied_results[in_bounds_results] = (voxel_grid.get_voxels_xyz(sample_locs[in_bounds_results, :]) > 0).squeeze(1) # (batch_size * num_rays * num_samples)
+        # only include rays which intersect the bounding volume, and only include samples inside non-pruned voxels
+        if(torch.any(in_bounds_results).item()):
+            voxel_vals = voxel_grid.get_voxels_xyz(sample_locs[in_bounds_results, :])
+            occupied_results[in_bounds_results] = (voxel_vals[:, 0] > 0) # (batch_size * num_rays * num_samples)
         occupied_results = occupied_results.reshape((batch_size, num_rays, num_samples)) # (batch_size * num_rays * num_samples)
+        
         return self.base_renderer.renderRays(raySamples = raySamples[...,:] * occupied_results[...,None], distances = distances)
