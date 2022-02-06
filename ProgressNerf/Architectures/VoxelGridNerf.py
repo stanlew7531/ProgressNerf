@@ -245,13 +245,17 @@ class VoxelGridNerf(object):
         
         mlp_outputs = self.nn.forward(encoded_locs, encoded_dirs_coarse) #(batch_size, num_rays, num_samples, 4)
 
-        if(mark_visited_voxels):
-            in_bounds_results = self.voxel_grid.are_voxels_xyz_in_bounds(sampled_locations) # (batch_size * num_rays * num_samples)
-            voxel_vals = self.voxel_grid.get_voxels_xyz(sampled_locations[in_bounds_results, :])
-            voxel_vals[:, 1] = voxel_vals[:, 1] * 0.95 # update the 'non-visited' prior
-            self.voxel_grid.set_voxels_xyz(sampled_locations[in_bounds_results, :], voxel_vals)
-
         rendered_output = self.renderer.renderRays(mlp_outputs, sampled_distances, voxels=self.voxel_grid, sample_locations=sampled_locations)
+
+        # mark voxels as visited if necessary
+        if(mark_visited_voxels):
+            in_bounds_results = self.voxel_grid.are_voxels_xyz_in_bounds(sampled_locations) # (batch_size, num_rays, num_samples)
+            rendered_depth = rendered_output['depth'] # (batch_size, num_rays)
+            is_past_depth = (sampled_distances[:,:,:] > (rendered_depth[:,:, None] + 0.01)) # TODO: make the depth relaxation part configurable
+            mark_visited = torch.bitwise_and(in_bounds_results, is_past_depth)
+            voxel_vals = self.voxel_grid.get_voxels_xyz(sampled_locations[mark_visited, :])
+            voxel_vals[:, 1] = voxel_vals[:, 1] * 0.99 # update the 'non-visited' prior
+            self.voxel_grid.set_voxels_xyz(sampled_locations[mark_visited, :], voxel_vals)
 
         if(self.nn_fine is not None):
             weighted_resampling_other_info = {'distances': sampled_distances, 'sigmas': mlp_outputs[:,:,:,3]}
@@ -339,7 +343,7 @@ class VoxelGridNerf(object):
 
     # performs the ray picking step and sends the results to the renderer
     # this is where the raypicker is called
-    def doTrainRendering(self, sample_batched):
+    def doTrainRendering(self, sample_batched, mark_visited_voxels=True):
         train_imgs = sample_batched['image'].to(self.device) # (batch_size, W, H, 3)
         train_depths = sample_batched['depth'].to(self.device) # (batch_size, W, H)
         # create the ray weights tensor based on the provided segmentation tools/parts
@@ -349,7 +353,7 @@ class VoxelGridNerf(object):
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
         ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
         ijs_label = torch.zeros_like(train_imgs)
-        render_result = self.render(ray_origins, ray_dirs, mark_visited_voxels=True)
+        render_result = self.render(ray_origins, ray_dirs, mark_visited_voxels=mark_visited_voxels)
         # TODO: find out how to properly vectorize this indexing
         train_pixels = torch.zeros_like(render_result['rgb'])
         train_pixel_depths = torch.zeros_like(render_result['depth'])
@@ -448,7 +452,7 @@ class VoxelGridNerf(object):
             if(self.nn_fine is not None):
                 self.nn_fine.train()
             for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader), leave = False):
-                rendered_output, train_pixels, train_depths = self.doTrainRendering(sample_batched)
+                rendered_output, train_pixels, train_depths = self.doTrainRendering(sample_batched, epoch >= 50)
                 losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'], rendered_depths=rendered_output["depth"].unsqueeze(-1), gt_depths=train_depths)
                 losses_i['loss'].backward()
                 self.optimizer.step()

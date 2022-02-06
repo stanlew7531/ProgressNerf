@@ -37,7 +37,8 @@ class NeuralRenderer(AbstractRenderer):
 
         render_result = {
             "rgb" : rgb_rendered, # (batch_size, num_rays, 3)
-            #"weights" : weights, # (batch_size, num_rays, num_samples)
+            "alphas" : alphas, # (batch_size, num_rays, num_samples)
+            "transmittances" : Tis, # (batch_size, num_rays, num_samples)
             "depth" : depth_rendered, # (batch_size, num_rays)
         }
 

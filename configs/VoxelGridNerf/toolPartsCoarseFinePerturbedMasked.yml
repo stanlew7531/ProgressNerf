@@ -1,18 +1,18 @@
-baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampHandle_test3/"
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampHandle_test9/"
 load_from_epoch: -1
 batch_size: 2
 num_workers: 1
-train_epochs: 300
-testPeriod: 10
+train_epochs: 801
+testPeriod: 20
 save_period: 10
 device: "cuda:1"
 
 train_dataloader:
     dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','00_01','00_02','00_03','00_04','01','01_01','01_02','01_03','02', '02_01', '03'], datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_handle']}
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_handle']}
 test_dataloader:
     dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','00_01','00_02','00_03','00_04','01','01_01','01_02','01_03','02', '02_01', '03'], datasetType: "test", samplesLimit: 5, rel_tools: ['clamp_handle']}
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "test", samplesLimit: 5, rel_tools: ['clamp_handle']}
 
 desired_tool: "clamp_handle"
 apply_masks: ['clamp_handle']
@@ -42,7 +42,7 @@ optim_lr: 0.001
 
 init_voxel_size: 0.01
 half_voxels_schedule: [50]
-prune_voxels_schedule: [66, 100, 133, 166, 200, 233, 266]
+prune_voxels_schedule: [66, 100, 133, 166, 200, 233, 266, 300, 333, 366, 400, 433, 466, 500, 533, 566, 600, 633, 666, 700, 733, 766, 800]
 prune_voxels_sample_count: 16000
 prune_voxels_gamma: 0.5
 
@@ -50,8 +50,8 @@ boundary_min_maxes: [-.2, -.2, -.2, .2, .2, .2]
 renderer: "voxel_neural_renderer"
 voxel_neural_renderer: {}
 train_loss:
-    loss_fn: "mse_loss"
-    mse_loss: {}
+    loss_fn: "mse_depth_loss"
+    mse_depth_loss: {}
 test_loss:
-    loss_fn: "mse_loss"
-    mse_loss: {}
+    loss_fn: "mse_depth_loss"
+    mse_depth_loss: {}
