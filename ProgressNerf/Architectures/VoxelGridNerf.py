@@ -172,6 +172,12 @@ class VoxelGridNerf(object):
         self.prune_voxels_schedule = [int(val) for val in config['prune_voxels_schedule']]
         self.prune_voxels_sample_count = int(config['prune_voxels_sample_count'])
         self.prune_voxels_gamma = float(config['prune_voxels_gamma'])
+        self.voxel_visit_after = int(config['voxel_visit_after_epoch'])
+        self.voxel_visit_depth_stoppage = float(config['voxel_visit_depth_stoppage']) if 'voxel_visit_depth_stoppage' in config.keys() else None
+        self.voxel_visit_factor = float(config['voxel_visit_factor'])
+
+        self.build_weighting_cloud = config['build_weighting_cloud']
+        self.weighting_cloud = None
 
         self.renderer = get_renderer(config['renderer'])(config[config['renderer']])
 
@@ -244,17 +250,18 @@ class VoxelGridNerf(object):
         encoded_dirs_coarse = encoded_dirs.unsqueeze(2).repeat(1,1,encoded_locs.shape[2],1)
         
         mlp_outputs = self.nn.forward(encoded_locs, encoded_dirs_coarse) #(batch_size, num_rays, num_samples, 4)
-
         rendered_output = self.renderer.renderRays(mlp_outputs, sampled_distances, voxels=self.voxel_grid, sample_locations=sampled_locations)
 
         # mark voxels as visited if necessary
         if(mark_visited_voxels):
             in_bounds_results = self.voxel_grid.are_voxels_xyz_in_bounds(sampled_locations) # (batch_size, num_rays, num_samples)
             rendered_depth = rendered_output['depth'] # (batch_size, num_rays)
-            is_past_depth = (sampled_distances[:,:,:] > (rendered_depth[:,:, None] + 0.01)) # TODO: make the depth relaxation part configurable
-            mark_visited = torch.bitwise_and(in_bounds_results, is_past_depth)
+            mark_visited = in_bounds_results
+            if(self.voxel_visit_depth_stoppage is not None):
+                is_past_depth = (sampled_distances[:,:,:] > (rendered_depth[:,:, None] + self.voxel_visit_depth_stoppage))
+                mark_visited = torch.bitwise_and(mark_visited, is_past_depth)
             voxel_vals = self.voxel_grid.get_voxels_xyz(sampled_locations[mark_visited, :])
-            voxel_vals[:, 1] = voxel_vals[:, 1] * 0.99 # update the 'non-visited' prior
+            voxel_vals[:, 1] = voxel_vals[:, 1] * self.voxel_visit_factor # update the 'non-visited' prior # TODO: make this factor configurable
             self.voxel_grid.set_voxels_xyz(sampled_locations[mark_visited, :], voxel_vals)
 
         if(self.nn_fine is not None):
@@ -361,6 +368,7 @@ class VoxelGridNerf(object):
             train_pixels[i] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
             train_pixel_depths[i] = train_depths[i, ijs[i,:,1], ijs[i,:,0]]
             ijs_label[i, ijs[i,:,1], ijs[i,:,0], :] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
+            
         return render_result, train_pixels, train_pixel_depths.unsqueeze(-1)
 
     # performs a rendering of the full image
@@ -452,7 +460,7 @@ class VoxelGridNerf(object):
             if(self.nn_fine is not None):
                 self.nn_fine.train()
             for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader), leave = False):
-                rendered_output, train_pixels, train_depths = self.doTrainRendering(sample_batched, epoch >= 50)
+                rendered_output, train_pixels, train_depths = self.doTrainRendering(sample_batched, epoch >= self.voxel_visit_after)
                 losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'], rendered_depths=rendered_output["depth"].unsqueeze(-1), gt_depths=train_depths)
                 losses_i['loss'].backward()
                 self.optimizer.step()
@@ -468,8 +476,7 @@ class VoxelGridNerf(object):
                 avg = np.mean(losses[key])
                 self.tb_writer.add_scalar('train/{0}'.format(key), avg, epoch)
                 outputString = outputString + ' train/{0}:{1:.4f}'.format(key,avg)
-            #avg_loss = np.mean(losses)
-            #self.tb_writer.add_scalar('train/mse', avg_loss, epoch)
+
             self.optimizer.zero_grad()
 
             # if we need to do evaluation this epoch
@@ -501,11 +508,6 @@ class VoxelGridNerf(object):
                     avg = np.mean(losses_test[key])
                     self.tb_writer.add_scalar('test/{0}'.format(key), avg, epoch)
                     outputString = outputString + ' test/{0}:{1:.4f}'.format(key,avg)
-                #avg_loss_test = np.mean(losses_test)
-                #self.tb_writer.add_scalar('test/mse', avg_loss_test, epoch)
-                #tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(epoch, avg_loss, avg_loss_test))
-            #else:
-                #tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}".format(epoch, avg_loss))
             tqdm.write(outputString)
             # output the arch's data on requisite epochs
             if(not(epoch == 0) and (epoch % self.savePeriod == 0)):
