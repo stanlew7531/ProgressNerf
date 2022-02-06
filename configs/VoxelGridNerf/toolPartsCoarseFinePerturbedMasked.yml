@@ -6,6 +6,7 @@ train_epochs: 801
 testPeriod: 20
 save_period: 10
 device: "cuda:1"
+build_weighting_cloud: True
 
 train_dataloader:
     dataloader: "toolsPartsDataloader"
@@ -41,6 +42,9 @@ dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
 optim_lr: 0.001
 
 init_voxel_size: 0.01
+voxel_visit_after_epoch: 50
+voxel_visit_depth_stoppage: 0.01
+voxel_visit_factor: 0.99
 half_voxels_schedule: [50]
 prune_voxels_schedule: [66, 100, 133, 166, 200, 233, 266, 300, 333, 366, 400, 433, 466, 500, 533, 566, 600, 633, 666, 700, 733, 766, 800]
 prune_voxels_sample_count: 16000
