@@ -69,14 +69,14 @@ class ToolsPartsDataloader(torch.utils.data.Dataset):
         seg_file = self.scene_segmentations[idx]
 
         img_data = np.ascontiguousarray(cv.imread(img_file, cv.IMREAD_COLOR)[:,:,::-1]) / 255.0 # swap from BGR to RGB and normalize
-        depth_data = np.int32(cv.imread(depth_file, cv.IMREAD_UNCHANGED)) # convert to int32 so that from_numpy works below
-        depth_data = np.float64(depth_data)/1000.0
+        depth_data = torch.from_numpy(np.int32(cv.imread(depth_file, cv.IMREAD_UNCHANGED))) # convert to int32 so that from_numpy works below
+        depth_data = depth_data.to(torch.float64)/1000.0
         pose_data = yaml.load(open(pose_file,'r'), yaml.FullLoader)
         seg_data = cv.imread(seg_file, cv.IMREAD_UNCHANGED)
 
         toReturn = {\
             "image" : torch.from_numpy(img_data).to(dtype=torch.float32),\
-            "depth" : torch.from_numpy(depth_data).to(dtype=torch.float32),\
+            "depth" : depth_data.to(dtype=torch.float32),\
             "segmentation" : torch.from_numpy(seg_data).to(dtype=torch.float32),\
             }
         for obj_key in pose_data:
