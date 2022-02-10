@@ -1,11 +1,11 @@
-baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampBar_test13/"
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampBar_test14/"
 load_from_epoch: -1
 batch_size: 2
 num_workers: 1
 train_epochs: 801
 testPeriod: 10
 save_period: 10
-device: "cuda:1"
+device: "cuda:0"
 build_weighting_cloud: True
 
 train_dataloader:
@@ -20,9 +20,9 @@ apply_masks: ['clamp_bar']
 eval_subbatch_size: 1024
 
 raypicker: "weighted_raypicker"
-weighted_raypicker: { num_rays: 256}
-raysampler: "perturbed_raysampler"
-perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 256, sample_std: 0.001}
+weighted_raypicker: { num_rays: 128}
+raysampler: "voxel_grid_bbox"
+voxel_grid_bbox: { num_samples: 256}
 
 camera_fx: 536.5441342081624
 camera_fy: 537.6663041098749
@@ -50,12 +50,12 @@ prune_voxels_schedule: [66, 100, 133, 166, 200, 233, 266, 300, 333, 366, 400, 43
 prune_voxels_sample_count: 16000
 prune_voxels_gamma: 0.5
 
-boundary_min_maxes: [-0.0661, -0.0094, -0.0026, 0.2629,  0.0092,  0.0026]
+boundary_min_maxes: [-0.1, -0.015, -0.015, 0.3,  0.015,  0.015]
 renderer: "voxel_neural_renderer"
 voxel_neural_renderer: {}
 train_loss:
-    loss_fn: "mse_loss_beta_reg"
-    mse_loss_beta_reg: {beta_regularization_term: 0.1}
+    loss_fn: "mse_depth_loss"
+    mse_loss: {}
 test_loss:
     loss_fn: "mse_loss"
     mse_loss: {}

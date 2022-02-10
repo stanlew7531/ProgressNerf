@@ -40,6 +40,8 @@ import ProgressNerf.Raycasting.WeightedRaypicker
 import ProgressNerf.Raycasting.NearFarRaysampler
 import ProgressNerf.Raycasting.WeightedRaysampler
 import ProgressNerf.Raycasting.PerturbedRaysampler
+import ProgressNerf.Raycasting.OriginNearFarRaysampler
+import ProgressNerf.Raycasting.VoxelGridBBoxRaysampler
 
 # import the supported arch encoders here
 import ProgressNerf.Encoders.PositionalEncoder
@@ -248,7 +250,7 @@ class VoxelGridNerf(object):
     def render(self, ray_origins, ray_dirs, mark_visited_voxels = False):
         # sampled_locations: (batch_size, num_rays, num_samples, 3)
         # sampled_distances: (batch_size, num_rays, num_samples)
-        sampled_locations, sampled_distances = self.raysampler.sampleRays(ray_origins, ray_dirs)
+        sampled_locations, sampled_distances = self.raysampler.sampleRays(ray_origins, ray_dirs, {'voxel_grid': self.voxel_grid})
 
         encoded_locs = self.pos_encoder.encodeFeature(sampled_locations)
         encoded_dirs = self.dir_encoder.encodeFeature(ray_dirs)
@@ -365,21 +367,21 @@ class VoxelGridNerf(object):
 
         # create the ray weights tensor based on the provided segmentation tools/parts
         # note that this is not always used by all raypickers (e.g. RandomRaypicker ignores this input)
-        points_segmentation = torch.bitwise_not(self.particle_field.getPointsSegmentation(cam_poses))
-        train_imgs.transpose(1,2)[points_segmentation, :] *= 0.0
-        train_imgs.transpose(1,2)[points_segmentation, :] += 1.0
-        train_depths.transpose(1,2)[points_segmentation] = 100.0
-        points_segmentation = points_segmentation.to(torch.float32) # (batch_size, W, H)
+        #points_segmentation = torch.bitwise_not(self.particle_field.getPointsSegmentation(cam_poses))
+        #train_imgs.transpose(1,2)[points_segmentation, :] *= 0.0
+        #train_imgs.transpose(1,2)[points_segmentation, :] += 1.0
+        #train_depths.transpose(1,2)[points_segmentation] = 100.0
+        #points_segmentation = points_segmentation.to(torch.float32) # (batch_size, W, H)
 
         ray_weights = self.getSegementationWeighting(sample_batched) # (batch_size, W, H)
 
-        background_points = points_segmentation.sum(dim=(1,2))
-        foreground_points = ray_weights.sum(dim=(1,2))
+        #background_points = points_segmentation.sum(dim=(1,2))
+        #foreground_points = ray_weights.sum(dim=(1,2))
 
-        ray_weights *= ((background_points / (foreground_points + background_points)) * 1).unsqueeze(-1).unsqueeze(-1).repeat((1, self.render_height, self.render_width))
-        points_segmentation *= (foreground_points / (foreground_points + background_points)).unsqueeze(-1).unsqueeze(-1).repeat((1, self.render_width, self.render_height))
+        #ray_weights *= ((background_points / (foreground_points + background_points)) * 1).unsqueeze(-1).unsqueeze(-1).repeat((1, self.render_height, self.render_width))
+        #points_segmentation *= (foreground_points / (foreground_points + background_points)).unsqueeze(-1).unsqueeze(-1).repeat((1, self.render_width, self.render_height))
 
-        ray_weights += points_segmentation.transpose(-1,-2)
+        #ray_weights += points_segmentation.transpose(-1,-2)
 
         # run the raypicker & render for the object rays
         ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
@@ -595,5 +597,5 @@ if __name__=="__main__":
     if(len(sys.argv) == 2):
         configFile = str(sys.argv[1])
     arch = VoxelGridNerf(configFile)
-    arch.populateParticleField()
+    #arch.populateParticleField()
     arch.train()

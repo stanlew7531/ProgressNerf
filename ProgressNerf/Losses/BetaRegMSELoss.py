@@ -15,6 +15,6 @@ class MSEBetaRegLoss(AbstractLoss):
         alphas = kwargs["alphas"] #(batch_size, num_rays, num_samples)
         #alphas = alphas[:,:,-1:] # get the last element to be alpha
         alphas = (alphas * (1. - 1e-7)) + 0.5e-7 # use to prevent the beta dist from evaluating to inf
-        reg_value = self.reg_lambda * ((torch.mean(torch.log(alphas) + torch.log(1.0 - alphas))).sigmoid() +1.0)
+        reg_value = self.reg_lambda * (torch.mean(torch.log(alphas) + torch.log(1.0 - alphas)))
         rgb_error = self.loss_fn(gt_pixels, rendered_pixels)
         return {"loss": rgb_error + reg_value, "rgb_error": rgb_error, "reg_value": reg_value}

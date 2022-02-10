@@ -1,4 +1,4 @@
-baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampHandle_test13/"
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampHandle_test14/"
 load_from_epoch: -1
 batch_size: 2
 num_workers: 1
@@ -21,8 +21,8 @@ eval_subbatch_size: 1024
 
 raypicker: "weighted_raypicker"
 weighted_raypicker: { num_rays: 256}
-raysampler: "perturbed_raysampler"
-perturbed_raysampler: { near_plane: 0.5, far_plane: 4.0, num_samples: 256, sample_std: 0.001}
+raysampler: "voxel_grid_bbox"
+voxel_grid_bbox: { num_samples: 512}
 
 camera_fx: 536.5441342081624
 camera_fy: 537.6663041098749
@@ -54,8 +54,8 @@ boundary_min_maxes: [0.0493,  0.0256,  0.0172, -0.0569, -0.1306, -0.0172]
 renderer: "voxel_neural_renderer"
 voxel_neural_renderer: {}
 train_loss:
-    loss_fn: "mse_loss_beta_reg"
-    mse_loss_beta_reg: {beta_regularization_term: 0.1}
+    loss_fn: "mse_loss"
+    mse_loss: {}
 test_loss:
     loss_fn: "mse_loss"
     mse_loss: {}

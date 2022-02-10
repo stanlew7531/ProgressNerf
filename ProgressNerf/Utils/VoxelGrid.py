@@ -83,3 +83,54 @@ class VoxelGrid(object):
         self.voxelSize = self.voxelSize * 0.5
         self.shape[0:3] = self.shape[0:3] * 2
 
+    # ray_origins: (N, 3)
+    # ray_dirs: (N, 3)
+    def getRayGridIntersections(self, ray_origins, ray_dirs):
+
+        # compute the taus which represent the distance for intersecting each of the 6 bounding planes
+        x0 = self.volume_bounds[0,0] # (1)
+        x1 = self.volume_bounds[1,0] # (1)
+        y0 = self.volume_bounds[0,1] # (1)
+        y1 = self.volume_bounds[1,1] # (1)
+        z0 = self.volume_bounds[0,2] # (1)
+        z1 = self.volume_bounds[1,2] # (1)
+
+        taus_x0 = ((x0 - ray_origins[...,0]) / ray_dirs[...,0]).unsqueeze(0)  # (N,1)
+        taus_x1 = ((x1 - ray_origins[...,0]) / ray_dirs[...,0]).unsqueeze(0)  # (N,1)
+        taus_y0 = ((y0 - ray_origins[...,1]) / ray_dirs[...,1]).unsqueeze(0)  # (N,1)
+        taus_y1 = ((y1 - ray_origins[...,1]) / ray_dirs[...,1]).unsqueeze(0)  # (N,1)
+        taus_z0 = ((z0 - ray_origins[...,2]) / ray_dirs[...,2]).unsqueeze(0)  # (N,1)
+        taus_z1 = ((z1 - ray_origins[...,2]) / ray_dirs[...,2]).unsqueeze(0)  # (N,1)
+
+        # concat and sort taus from least to greatest
+        all_taus = torch.cat((taus_x0, taus_x1, taus_y0, taus_y1, taus_z0, taus_z1), dim=0)   # (6, N)
+        all_taus = all_taus.transpose(1,0).contiguous()
+        all_taus, _ = torch.sort(all_taus, dim=-1) #(N, 6)
+
+        # ray_origins: (N, 3)
+        # ray_dirs: (N, 3)
+        points = ray_origins.unsqueeze(1).repeat((1,6,1)) + all_taus.unsqueeze(-1).repeat((1,1,3)) * ray_dirs[...,:].unsqueeze(1).repeat((1,6,1)) # (N, 6, 3)
+
+        # use eps on boundary check to avoid floating point issues
+        eps = 1e-6
+        points_x_in_bounds = torch.logical_and(points[...,0] >= x0 - eps, points[...,0] <= x1 + eps)
+        points_y_in_bounds = torch.logical_and(points[...,1] >= y0 - eps, points[...,1] <= y1 + eps)
+        points_z_in_bounds = torch.logical_and(points[...,2] >= z0 - eps, points[...,2] <= z1 + eps)
+
+        points_in_bounds = torch.logical_and(torch.logical_and(points_x_in_bounds, points_y_in_bounds), points_z_in_bounds)
+        _, min_sorted_points_indices = torch.sort(points_in_bounds.to(dtype=torch.int8), dim=-1, descending=True)
+        _, max_sorted_points_indices = torch.sort(torch.flip(points_in_bounds, dims=[-1]).to(dtype=torch.int8), dim=-1, descending=True)
+        min_indices = min_sorted_points_indices[...,0]
+        max_indices = 5 - max_sorted_points_indices[...,0] # have to do (5 - x) operation due to the previous flipping
+
+
+        # gotta do the unsqueeze/repeat in order to make sizes match
+        min_points = torch.gather(input=points, dim=1, index=min_indices.unsqueeze(-1).unsqueeze(-1).repeat((1,1,3))).squeeze()
+        max_points = torch.gather(input=points, dim=1, index=max_indices.unsqueeze(-1).unsqueeze(-1).repeat((1,1,3))).squeeze()
+        min_taus = torch.gather(input=all_taus, dim=1, index=min_indices.unsqueeze(-1)).squeeze()
+        max_taus = torch.gather(input=all_taus, dim=1, index=max_indices.unsqueeze(-1)).squeeze()
+
+        return min_points, max_points, min_taus, max_taus
+
+
+
