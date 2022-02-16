@@ -13,8 +13,19 @@ class OGNerf(nn.Module):
     """
     def __init__(self, config:Dict):
         super(OGNerf, self).__init__()
-        pos_in_dims = config['pos_enc_levels'] * 2 * 3 # (L * 2) for sin/cos functions
-        dir_in_dims = config['dir_enc_levels'] * 2 * 3 # * 3 for number of base dims
+        include_orig_pos_in = config['includeOrigPos'] if 'includeOrigPos' in config.keys() else False
+        include_orig_dir_in = config['includeOrigDir'] if 'includeOrigDir' in config.keys() else False
+
+        if(include_orig_pos_in):
+            pos_in_dims = (config['pos_enc_levels'] * 2 + 1) * 3 # (L * 2) + 1 for sin/cos functions while including original values
+        else:
+            pos_in_dims = config['pos_enc_levels'] * 2 * 3 # (L * 2) for sin/cos functions
+            
+        if(include_orig_dir_in):
+            dir_in_dims = (config['dir_enc_levels'] * 2 + 1) * 3 # (L * 2) + 1 for sin/cos functions while including original values
+        else:
+            dir_in_dims = config['dir_enc_levels'] * 2 * 3 # (L * 2) for sin/cos functions
+
         self.initialize(pos_in_dims, dir_in_dims, config['hidden_dims'])
     
     def initialize(self, pos_in_dims, dir_in_dims, D):
@@ -39,7 +50,7 @@ class OGNerf(nn.Module):
             nn.Linear(D + pos_in_dims, D), nn.ReLU(),  # shortcut
             nn.Linear(D, D), nn.ReLU(),
             nn.Linear(D, D), nn.ReLU(),
-            nn.Linear(D, D), nn.ReLU(),
+            nn.Linear(D, D)
         )
 
         self.fc_density = nn.Linear(D, 1)
@@ -61,12 +72,19 @@ class OGNerf(nn.Module):
         x = torch.cat([x, pos_enc], dim=3)  # (H, W, N_sample, D+pos_in_dims)
         x = self.layers1(x)  # (H, W, N_sample, D)
 
-        density = self.fc_density(x)  # (H, W, N_sample, 1)
+        density = self.fc_density(x)
+
+        # add regularization noise as per Mildenhall et al. (training details section)
+        if(self.training):
+            density_reg = torch.randn_like(density)
+            density = density + density_reg
+
+        density = density.relu()  # (H, W, N_sample, 1)
 
         feat = self.fc_feature(x)  # (H, W, N_sample, D)
         x = torch.cat([feat, dir_enc], dim=3)  # (H, W, N_sample, D+dir_in_dims)
         x = self.rgb_layers(x)  # (H, W, N_sample, D/2)
-        rgb = self.fc_rgb(x)  # (H, W, N_sample, 3)
+        rgb = self.fc_rgb(x).sigmoid()  # (H, W, N_sample, 3)
 
         rgb_den = torch.cat([rgb, density], dim=3)  # (H, W, N_sample, 4)
         return rgb_den

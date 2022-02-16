@@ -85,12 +85,13 @@ class OGNerfArch(object):
                         self.start_epoch = 0
                     else:
                         load_checkpoint_dir = os.path.join(self.base_dir, "epoch_{0}".format(latest_epoch))
-                        self.start_epoch = latest_epoch
+                        self.start_epoch = latest_epoch + 1
                         print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
                         self.loadTrainState(load_checkpoint_dir)
                         print("resuming training from epoch {0}...".format(self.start_epoch))
                 else:
                     load_checkpoint_dir= os.path.join(self.base_dir, "epoch_{0}".format(self.start_epoch))
+                    self.start_epoch = self.start_epoch + 1
                     print("loading model  & optimizer params from {0}".format(load_checkpoint_dir))
                     self.loadTrainState(load_checkpoint_dir)
                     print("resuming training from epoch {0}...".format(self.start_epoch))
@@ -203,6 +204,8 @@ class OGNerfArch(object):
         self.nn.load_state_dict(torch.load(os.path.join(input_dir, "mlp_dict.ptr")))
         if(self.nn_fine is not None):
             self.nn_fine.load_state_dict(torch.load(os.path.join(input_dir,"mlp_dict_fine.ptr")))
+        self.nn = self.nn.to(self.device)
+        self.nn_fine = self.nn.to(self.device)
 
     def loadTrainState(self, checkpoint_dir:str = "latest"):
         input_dir = os.path.join(self.base_dir, checkpoint_dir)
@@ -227,7 +230,7 @@ class OGNerfArch(object):
         rendered_output = self.renderer.renderRays(mlp_outputs, sampled_distances)
 
         if(self.nn_fine is not None):
-            weighted_resampling_other_info = {'distances': sampled_distances, 'sigmas': mlp_outputs[:,:,:,3].relu()}
+            weighted_resampling_other_info = {'distances': sampled_distances, 'sigmas': mlp_outputs[:,:,:,3]}
             _, resampled_distances = self.raysampler_fine.sampleRays(ray_origins, ray_dirs, other_info=weighted_resampling_other_info)
             resampled_distances, _ = torch.cat((sampled_distances, resampled_distances), dim = -1).sort()
             resampled_locations = ray_origins[...,None,:] + ray_dirs[..., None, :] * resampled_distances[...,:,None]
@@ -241,7 +244,6 @@ class OGNerfArch(object):
         return rendered_output
 
     def getSegementationWeighting(self, sample_batched):
-
         segmentation_img = sample_batched['segmentation'].to(self.device) # (batch_size, W, H)
 
         # create the ray weights tensor based on the provided segmentation tools/parts
@@ -270,20 +272,23 @@ class OGNerfArch(object):
         render_result = self.render(ray_origins, ray_dirs)
         # TODO: find out how to properly vectorize this indexing
         train_pixels = torch.zeros_like(render_result['rgb'])
+        train_pixel_depths = torch.zeros_like(render_result['depth'])
         for i in range(train_pixels.shape[0]):
             train_pixels[i] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
+            train_pixel_depths[i] = train_depths[i, ijs[i,:,1], ijs[i,:,0]]
             ijs_label[i, ijs[i,:,1], ijs[i,:,0], :] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
 
-        return render_result, train_pixels
+        return render_result, train_pixels, train_pixel_depths.unsqueeze(-1)
 
     # performs a rendering of the full image
     # unlike doTrainRendering, the raypicker is not run (except to the the totality to rays created). Instead, we
     # extract sub-batches of all rays for rendering to prevent out-of-memory issues
     def doTestRendering(self, sample_batched):
         test_imgs = sample_batched['image'].to(self.device) # (batch_size, W, H, 3)
+        test_depths = sample_batched['depth'].to(self.device).unsqueeze(-1) # (batch_size, W, H, 3)
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
         full_rendering = self.doFullRender(cam_poses)
-        return full_rendering, test_imgs
+        return full_rendering, test_imgs, test_depths
 
     # performs a rendering at an arbitrary camera pose for the entire image.
     # this method has no dependency on the underlying dataloader, so it can be called in applications
@@ -314,6 +319,11 @@ class OGNerfArch(object):
             else:
                 full_rendering['rgb'] = subBatch_rendering['rgb'].clone()
 
+            if('depth' in full_rendering.keys()):
+                full_rendering['depth'] = torch.cat((full_rendering['depth'], subBatch_rendering['depth'].clone()), dim=1)
+            else:
+                full_rendering['depth'] = subBatch_rendering['depth'].clone()
+
         return full_rendering
 
     def train(self):
@@ -337,24 +347,32 @@ class OGNerfArch(object):
             self.nn_fine.to(self.device)
 
         # main training loop
-        for epoch in tqdm(range(self.start_epoch, self.train_epochs)):
-            losses = []
-            losses_test = []
+        for epoch in tqdm(range(self.start_epoch, self.train_epochs), leave = True):
             # Do training step
+            losses = {}
             self.nn.train()
+
+            outputString = "Epoch:{0}".format(epoch)
             if(self.nn_fine is not None):
                 self.nn_fine.train()
-            for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader)):
-                rendered_output, train_pixels = self.doTrainRendering(sample_batched)
-                losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'])
+            for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader), leave = False):
+                rendered_output, train_pixels, train_depths = self.doTrainRendering(sample_batched)
+                losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'], rendered_depths=rendered_output["depth"].unsqueeze(-1), gt_depths=train_depths)
                 losses_i['loss'].backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
-                losses.append(losses_i['loss'].item())
+                for key in losses_i.keys():
+                    if(key in losses.keys()):
+                        losses[key].append(losses_i[key].item())
+                    else:
+                        losses[key] = list([losses_i[key].item()])
             
             # compute & log metrics
-            avg_loss = np.mean(losses)
-            self.tb_writer.add_scalar('train/mse', avg_loss, epoch)
+            for key in losses.keys():
+                avg = np.mean(losses[key])
+                self.tb_writer.add_scalar('train/{0}'.format(key), avg, epoch)
+                outputString = outputString + ' train/{0}:{1:.4f}'.format(key,avg)
+
             self.optimizer.zero_grad()
 
             # if we need to do evaluation this epoch
@@ -364,45 +382,59 @@ class OGNerfArch(object):
                 if(self.nn_fine is not None):
                     self.nn_fine.eval()
                 # render the entire image instead of only the sampled pixels, compute loss & send to tensorboard
+                losses_test = {}
                 with torch.no_grad():
-                    for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
-                        rendered_output, test_images = self.doTestRendering(sample_batched)
-                        rgb_output = rendered_output['rgb'].contiguous().reshape((1, self.render_width, self.render_height, 3)).transpose(1,2).contiguous()
-                        losses = self.test_loss.calculateLoss(test_images, rgb_output)
-                        losses_test.append(losses['loss'].item())
+                    for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader), leave = False):
+                        rendered_output, test_images, test_depths = self.doTestRendering(sample_batched)
+                        rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
+                        depth_output = rendered_output['depth'].reshape((1, self.render_width, self.render_height, 1)).transpose(1,2)
+                        losses = self.test_loss.calculateLoss(test_images, rgb_output, rendered_depths=depth_output, gt_depths=test_depths)
+                        for key in losses_i.keys():
+                            if(key in losses_test.keys()):
+                                losses_test[key].append(losses_i[key].item())
+                            else:
+                                losses_test[key] = list([losses_i[key].item()])
                         # swap dimensions since tensorboard expects shape (batches, channels, w, h)
                         # but test_images, etc. comes out as (batches, w, h, channels)
-                        test_images = torch.transpose(test_images, 3, 1).transpose(2,3).contiguous()
-                        rgb_output = torch.transpose(rgb_output, 3, 1).transpose(2,3).contiguous()
+                        test_images = torch.transpose(test_images, 3, 1).transpose(2,3)
+                        rgb_output = torch.transpose(rgb_output, 3, 1).transpose(2,3)
                         self.tb_writer.add_images("test/gtImage/{0}".format(i_batch), test_images, epoch)
                         self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, epoch)
-                avg_loss_test = np.mean(losses_test)
-                self.tb_writer.add_scalar('test/mse', avg_loss_test, epoch)
-                tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}, Test Avg RGB MSE loss: {2:.4f}".format(epoch, avg_loss, avg_loss_test))
-            else:
-                tqdm.write("Epoch: {0}, Avg RGB MSE loss: {1:.4f}".format(epoch, avg_loss))
-
+                for key in losses_test.keys():
+                    avg = np.mean(losses_test[key])
+                    self.tb_writer.add_scalar('test/{0}'.format(key), avg, epoch)
+                    outputString = outputString + ' test/{0}:{1:.4f}'.format(key,avg)
+            tqdm.write(outputString)
             # output the arch's data on requisite epochs
             if(not(epoch == 0) and (epoch % self.savePeriod == 0)):
                 self.saveTrainState("epoch_{0}".format(epoch))
         
-        # final end-of-training outputstest_loss
-        losses_test = []
+        # final end-of-training outputs test_loss
+        losses_test = {}
         with torch.no_grad():
-            for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader)):
-                rendered_output, test_images = self.doTestRendering(sample_batched)
+            for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader), leave = True):
+                rendered_output, test_images, test_depths = self.doTestRendering(sample_batched)
                 rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
-                losses = self.test_loss.calculateLoss(test_images, rgb_output)
-                losses_test.append(losses['loss'].item())
+                depth_output = rendered_output['depth'].reshape((1, self.render_width, self.render_height, 1)).transpose(1,2)
+                losses = self.test_loss.calculateLoss(test_images, rgb_output, rendered_depths=depth_output, gt_depths=test_depths)
+                for key in losses_i.keys():
+                    if(key in losses_test.keys()):
+                        losses_test[key].append(losses_i[key].item())
+                    else:
+                        losses_test[key] = list([losses_i[key].item()])
                 # swap dimensions since tensorboard expects shape (batches, channels, w, h)
                 # but test_images, etc. comes out as (batches, w, h, channels)
                 test_images = torch.transpose(test_images, 3, 1).transpose(2,3)
                 rgb_output = torch.transpose(rgb_output, 3, 1).transpose(2,3)
                 self.tb_writer.add_images("test/gtImage/{0}".format(i_batch), test_images, self.train_epochs)
                 self.tb_writer.add_images("test/rendered/{0}".format(i_batch), rgb_output, self.train_epochs)
-        avg_loss_test = np.mean(losses_test)
-        self.tb_writer.add_scalar('test/mse', avg_loss_test, self.train_epochs)
-        tqdm.write("Epoch: {0}, Avg RGB loss: {1:.4f}, Test Avg RGB loss: {2:.4f}".format(self.train_epochs, avg_loss, avg_loss_test))
+        outputString = "Epoch:{0}".format(self.train_epochs)
+        for key in losses_test.keys():
+            avg = np.mean(losses_test[key])
+            self.tb_writer.add_scalar('test/{0}'.format(key), avg, epoch)
+            outputString = outputString + ' test/{0}:{1:.4f}'.format(key,avg)
+        tqdm.write(outputString)
+        self.saveTrainState("epoch_{0}".format(self.train_epochs))
 
 if __name__=="__main__":
     torch.manual_seed(0)

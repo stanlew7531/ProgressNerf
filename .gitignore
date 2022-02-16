@@ -3,3 +3,4 @@ __pycache__
 *.so
 settings.json
 *.egg-info
+.ipynb_checkpoints

@@ -16,6 +16,8 @@ class ToolsPartsDataloader(torch.utils.data.Dataset):
         self.numToLoad = config['samplesLimit']
         if('label' in config):
             self.tool_label = config['label']
+        if('rel_tools' in config):
+            self.rel_tools = config['rel_tools']
 
         self.scene_images = []
         self.scene_depths = []
@@ -67,24 +69,26 @@ class ToolsPartsDataloader(torch.utils.data.Dataset):
         seg_file = self.scene_segmentations[idx]
 
         img_data = np.ascontiguousarray(cv.imread(img_file, cv.IMREAD_COLOR)[:,:,::-1]) / 255.0 # swap from BGR to RGB and normalize
-        depth_data = np.int32(cv.imread(depth_file, cv.IMREAD_UNCHANGED)) # convert to int32 so that from_numpy works below
+        depth_data = torch.from_numpy(np.int32(cv.imread(depth_file, cv.IMREAD_UNCHANGED))) # convert to int32 so that from_numpy works below
+        depth_data = depth_data.to(torch.float64)/1000.0
         pose_data = yaml.load(open(pose_file,'r'), yaml.FullLoader)
         seg_data = cv.imread(seg_file, cv.IMREAD_UNCHANGED)
 
         toReturn = {\
             "image" : torch.from_numpy(img_data).to(dtype=torch.float32),\
-            "depth" : torch.from_numpy(depth_data).to(dtype=torch.float32),\
+            "depth" : depth_data.to(dtype=torch.float32),\
             "segmentation" : torch.from_numpy(seg_data).to(dtype=torch.float32),\
             }
         for obj_key in pose_data:
-            pose_key = obj_key + "_pose"
-            label_key = obj_key + "_label"
-            pose_t, pose_quat = pose_data[obj_key]["pose"]
-            pose_r = R.from_quat(pose_quat[1:4] + [pose_quat[0]]).as_matrix()
-            pose = np.eye(4)
-            pose[0:3, 0:3] = pose_r
-            pose[0:3, 3] = np.transpose(pose_t)
-            toReturn[pose_key] = torch.from_numpy(pose).to(dtype=torch.float32)
-            toReturn[label_key] = pose_data[obj_key]["label"]
+            if(obj_key in self.rel_tools):
+                pose_key = obj_key + "_pose"
+                label_key = obj_key + "_label"
+                pose_t, pose_quat = pose_data[obj_key]["pose"]
+                pose_r = R.from_quat(pose_quat[1:4] + [pose_quat[0]]).as_matrix()
+                pose = np.eye(4)
+                pose[0:3, 0:3] = pose_r
+                pose[0:3, 3] = np.transpose(pose_t)
+                toReturn[pose_key] = torch.from_numpy(pose).to(dtype=torch.float32)
+                toReturn[label_key] = pose_data[obj_key]["label"]
 
         return toReturn

@@ -1,0 +1,61 @@
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampHandle_pf/"
+load_from_epoch: -1
+batch_size: 2
+num_workers: 1
+train_epochs: 801
+testPeriod: 10
+save_period: 10
+device: "cuda:1"
+build_weighting_cloud: True
+
+train_dataloader:
+    dataloader: "toolsPartsDataloader"
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_handle']}
+test_dataloader:
+    dataloader: "toolsPartsDataloader"
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "test", samplesLimit: 5, rel_tools: ['clamp_handle']}
+
+desired_tool: "clamp_handle"
+apply_masks: ['clamp_handle']
+eval_subbatch_size: 1024
+
+raypicker: "weighted_raypicker"
+weighted_raypicker: { num_rays: 256}
+raysampler: "voxel_grid_bbox"
+voxel_grid_bbox: { num_samples: 256}
+
+camera_fx: 536.5441342081624
+camera_fy: 537.6663041098749
+camera_tx: 324.1496087846382
+camera_ty: 224.2990274169881
+render_resoluion: [640,480]
+coarse_model:
+    nnModel: "OGNerf"
+    OGNerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
+fine_model:
+    nnModel: "OGNerf"
+    OGNerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_dims: 128}
+    raysampler: "weighted_raysampler"
+    weighted_raysampler: {num_samples: 256}
+posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10, includeOrig: True}}
+dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
+optim_lr: 0.001
+
+init_voxel_size: 0.01
+voxel_visit_after_epoch: 50
+voxel_visit_depth_stoppage: 0.01
+voxel_visit_factor: 0.99
+half_voxels_schedule: [50]
+prune_voxels_schedule: [66, 100, 133, 166, 200, 233, 266, 300, 333, 366, 400, 433, 466, 500, 533, 566, 600, 633, 666, 700, 733, 766, 800]
+prune_voxels_sample_count: 16000
+prune_voxels_gamma: 0.5
+
+boundary_min_maxes: [-0.0569, -0.1306, -0.0172, 0.0493,  0.0256,  0.0172]
+renderer: "voxel_neural_renderer"
+voxel_neural_renderer: {}
+train_loss:
+    loss_fn: "mse_loss"
+    mse_loss: {}
+test_loss:
+    loss_fn: "mse_loss"
+    mse_loss: {}

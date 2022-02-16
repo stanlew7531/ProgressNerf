@@ -10,7 +10,7 @@ class AbstractRenderer(ABC):
         pass  
 
     @abstractmethod
-    def renderRays(self, raySamples: torch.Tensor, deltas: torch.Tensor):
+    def renderRays(self, raySamples: torch.Tensor, deltas: torch.Tensor, **kwargs):
         pass
 
 RENDERER_REGISTRY = {}

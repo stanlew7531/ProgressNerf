@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from typing import Dict
 from ProgressNerf.Registries.RaypickerRegistry import register_raypicker, AbstractRaypicker
+from ProgressNerf.Utils.CameraUtils import ComputeCameraEpipolars
 import cv2 as cv
 
 @register_raypicker("random_raypicker")
@@ -15,7 +16,7 @@ class RandomRaypicker(AbstractRaypicker):
         self.camera_matrix = camera_matrix
         self.width = vp_width
         self.height = vp_height
-        self.baseRays = self.__initBaseRays()
+        self.baseRays = ComputeCameraEpipolars(self.camera_matrix, self.height, self.width)
         self.camera_initialized=True
 
     def getRays(self, camera_tfs: torch.Tensor, **kwargs):
@@ -68,28 +69,3 @@ class RandomRaypicker(AbstractRaypicker):
         ray_directions = torch.matmul(ray_rotations, picked_rays).squeeze(3) # (batch_dim, width*height, 3)
 
         return ray_origins, ray_directions
-
-    def __initBaseRays(self):
-        """Compute base ray directions in camera coordinates, which only depends on intrinsics.
-        These will be further converted to world coordinates later, using camera poses.
-        :return: (W, H, 3) torch.float32
-        """
-        y, x = torch.meshgrid(torch.arange(self.height, dtype=torch.float32),
-                            torch.arange(self.width, dtype=torch.float32))  # (H, W)
-
-        # Use OpenCV coordinate in 3D:
-        #   +x points to right
-        #   +y points to down
-        #   +z points to forward
-        #
-        # The coordinate of the top left corner of an image should be (-0.5W, -0.5H, 1.0), then normed to be magnitude 1.0
-        dirs_x = (x - 0.5*self.width) / self.camera_matrix[0,0]  # (H, W)
-        dirs_y = (y - 0.5*self.height) / self.camera_matrix[1,1]  # (H, W)
-        dirs_z = torch.ones((self.height, self.width), dtype=torch.float32)  # (H, W)
-        rays_dir = torch.stack([dirs_x, dirs_y, dirs_z], dim=-1)  # (H, W, 3)
-        rays_dir = rays_dir.transpose(0,1).contiguous() # put into row-major format
-        rays_dir = torch.reshape(rays_dir, (self.height * self.width, 3)) # (H*W, 3)
-        norms = torch.linalg.norm(rays_dir, dim=1, keepdim=True) # (H*W, 1)
-        rays_dir = rays_dir / norms # (H*W, 3)
-        rays_dir = torch.reshape(rays_dir, (self.width, self.height, 3)).contiguous() # (W, H, 3)
-        return rays_dir

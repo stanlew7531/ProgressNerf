@@ -8,6 +8,7 @@ from ProgressNerf.Registries.EncoderRegistry import AbstractEncoder, register_en
 class PositionalEncoder(AbstractEncoder):
     def __init__(self, config: Dict):
         self.L = config["levels"]
+        self.includeOriginal = config["includeOrig"] if("includeOrig" in config.keys()) else False
 
     def encodeFeature(self, feature: torch.Tensor):
         '''
@@ -30,13 +31,16 @@ class PositionalEncoder(AbstractEncoder):
         coefficients = coefficients.unsqueeze(0).repeat((reshape_d0, og_shape[-1], 1)) # match the size of the input tensor
 
         trig_fn_inputs = coefficients * feature.reshape((reshape_d0, og_shape[-1],1))
-
         all_results = torch.cat((torch.sin(trig_fn_inputs), torch.cos(trig_fn_inputs)), dim=1)
 
         new_shape = list(og_shape)
         new_shape[-1] = new_shape[-1] * self.L * 2
+            
         new_shape = torch.Size(new_shape)
 
         restored_results = all_results.reshape(new_shape).contiguous()
+
+        if(self.includeOriginal):
+            restored_results = torch.cat((feature, restored_results), dim = -1)
 
         return restored_results
