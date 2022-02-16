@@ -19,7 +19,7 @@ class VoxelGridBBoxRaysampler(AbstractRaysampler):
         '''
         batch_size, num_rays, _ = ray_origins.shape
         voxel_grid = other_info['voxel_grid']
-        _,_,min_taus, max_taus = voxel_grid.getRayGridIntersections(ray_origins.flatten(0,-2), ray_dirs.flatten(0,-2)) # min_taus & max_taus: (batch_size*num_rays)
+        min_pts, max_pts ,min_taus, max_taus = voxel_grid.getRayGridIntersections(ray_origins.flatten(0,-2), ray_dirs.flatten(0,-2)) # min_taus & max_taus: (batch_size*num_rays)
         deltas = (max_taus - min_taus).reshape(batch_size, num_rays, 1).repeat((1,1,self.num_samples))
         alphas = torch.linspace(0.0, 1.0, self.num_samples, device=ray_origins.device, dtype=ray_origins.dtype)
         deltas = deltas * alphas

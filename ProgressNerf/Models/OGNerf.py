@@ -50,7 +50,7 @@ class OGNerf(nn.Module):
             nn.Linear(D + pos_in_dims, D), nn.ReLU(),  # shortcut
             nn.Linear(D, D), nn.ReLU(),
             nn.Linear(D, D), nn.ReLU(),
-            nn.Linear(D, D), nn.ReLU(),
+            nn.Linear(D, D)
         )
 
         self.fc_density = nn.Linear(D, 1)
@@ -84,7 +84,7 @@ class OGNerf(nn.Module):
         feat = self.fc_feature(x)  # (H, W, N_sample, D)
         x = torch.cat([feat, dir_enc], dim=3)  # (H, W, N_sample, D+dir_in_dims)
         x = self.rgb_layers(x)  # (H, W, N_sample, D/2)
-        rgb = self.fc_rgb(x)  # (H, W, N_sample, 3)
+        rgb = self.fc_rgb(x).sigmoid()  # (H, W, N_sample, 3)
 
         rgb_den = torch.cat([rgb, density], dim=3)  # (H, W, N_sample, 4)
         return rgb_den

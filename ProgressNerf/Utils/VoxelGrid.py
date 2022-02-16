@@ -15,6 +15,12 @@ class VoxelGrid(object):
         self.voxels = torch.zeros((self.shape[0].item(),self.shape[1].item(),self.shape[2].item(),stored_data_size), device=axesMinMax.device)
         self.shape = torch.cat((self.shape, torch.Tensor([stored_data_size]).to(device=self.shape.device))) #update with the stored_data_size
 
+        self.points = torch.zeros((8,3), dtype=torch.float32, device=axesMinMax.device)
+        for i in range(2):
+            for j in range(2):
+                for k in range(2):
+                    self.points[i*4 + j*2 + k] = torch.Tensor([self.volume_bounds[i,0], self.volume_bounds[j,1], self.volume_bounds[k,2]]).to(device=axesMinMax.device)
+
     def save(self, file_path:str):
         previous_device = self.voxels.device
         self.to("cpu")
@@ -38,6 +44,7 @@ class VoxelGrid(object):
         self.volume_bounds = self.volume_bounds.to(dvc)
         self.shape = self.shape.to(dvc)
         self.voxels = self.voxels.to(dvc)
+        self.points = self.points.to(dvc)
 
     # allows for directly getting voxel values by index (not 3d location)
     # is primarily used internally, but is exposed externally because seems like no reason not to
@@ -64,14 +71,13 @@ class VoxelGrid(object):
     # xyz_locations: (N, 3) 3d locations to get the voxel values for
     # values: (N, stored_data_size) data to assign to each voxel location
     def set_voxels_xyz(self, xyz_locations:torch.Tensor, values:torch.Tensor):
-        voxel_locations = torch.floor((xyz_locations[:] - self.volume_bounds[0,:]) / self.voxelSize).to(torch.long)
+        voxel_locations = self.get_voxel_locs(xyz_locations)
         self[voxel_locations[:,0], voxel_locations[:,1], voxel_locations[:,2]] = values[:]
 
     # xyz_locations: (N, 3) 3d locations to determine if they are inside the top level bounding box
     def are_voxels_xyz_in_bounds(self, xyz_locations:torch.Tensor):
-        voxel_locations = torch.floor((xyz_locations[:] - self.volume_bounds[0,:]) / self.voxelSize).to(torch.long)
+        voxel_locations = self.get_voxel_locs(xyz_locations)
         is_in_bounds = torch.all(torch.logical_and(voxel_locations >= torch.zeros(3,device = self.voxels.device), voxel_locations < self.shape[0:3]), dim = -1) # (N)
-        #in_bound_voxels = voxel_locations[is_in_bounds].reshape((int(is_in_bounds.shape[0] / 3), int(3)))
         return is_in_bounds
 
     
@@ -82,6 +88,23 @@ class VoxelGrid(object):
 
         self.voxelSize = self.voxelSize * 0.5
         self.shape[0:3] = self.shape[0:3] * 2
+
+    # cam_matrix: (3, 3)
+    # cam_poses: (N, 4, 4)
+    def getVoxelGridBBox(self, cam_matrix, cam_poses, render_height, render_width):
+        points_homo = torch.cat([self.points, torch.ones((8,1), device=self.points.device)], dim = -1).unsqueeze(-1) # (8, 4, 1)
+        points_cam_frame = torch.matmul(torch.linalg.inv(cam_poses).unsqueeze(1), points_homo)# (N, 8, 4, 1)
+        ijzs = torch.matmul(cam_matrix.unsqueeze(0), points_cam_frame[...,0:3,:].unsqueeze(-3)).squeeze() # (N, 8, 3)
+        ijzs = ijzs[...,0:2]/ijzs[...,2:] # (N, 8, 2)
+        to_return = torch.zeros((ijzs.shape[0], render_height, render_width), device = self.points.device) # (N, H, W)        
+        for idx in range(ijzs.shape[0]):
+            max_i = torch.max(ijzs[idx,:,0]).to(dtype=torch.long)
+            min_i = torch.min(ijzs[idx,:,0]).to(dtype=torch.long)
+            max_j = torch.max(ijzs[idx,:,1]).to(dtype=torch.long)
+            min_j = torch.min(ijzs[idx,:,1]).to(dtype=torch.long)
+            to_return[idx,min_j:max_j, min_i:max_i] = 1.0
+        return to_return, ijzs
+
 
     # ray_origins: (N, 3)
     # ray_dirs: (N, 3)
@@ -109,7 +132,7 @@ class VoxelGrid(object):
 
         # ray_origins: (N, 3)
         # ray_dirs: (N, 3)
-        points = ray_origins.unsqueeze(1).repeat((1,6,1)) + all_taus.unsqueeze(-1).repeat((1,1,3)) * ray_dirs[...,:].unsqueeze(1).repeat((1,6,1)) # (N, 6, 3)
+        points = ray_origins.unsqueeze(1).repeat((1,6,1)) + (all_taus.unsqueeze(-1).repeat((1,1,3)) * ray_dirs[...,:].unsqueeze(1).repeat((1,6,1))) # (N, 6, 3)
 
         # use eps on boundary check to avoid floating point issues
         eps = 1e-6

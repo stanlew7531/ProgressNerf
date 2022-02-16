@@ -40,8 +40,8 @@ def ComputeCameraEpipolars(camera_matrix, height, width):
         #   +z points to forward
         #
         # The coordinate of the top left corner of an image should be (-0.5W, -0.5H, 1.0), then normed to be magnitude 1.0
-        dirs_x = (x - 0.5*width) / camera_matrix[0,0]  # (H, W)
-        dirs_y = (y - 0.5*height) / camera_matrix[1,1]  # (H, W)
+        dirs_x = (x - camera_matrix[0,-1]) / camera_matrix[0,0]  # (H, W)
+        dirs_y = (y - camera_matrix[1,-1]) / camera_matrix[1,1]  # (H, W)
         dirs_z = torch.ones((height, width), dtype=torch.float32, device=camera_matrix.device)  # (H, W)
         rays_dir = torch.stack([dirs_x, dirs_y, dirs_z], dim=-1)  # (H, W, 3)
         rays_dir = rays_dir.transpose(0,1).contiguous() # put into row-major format

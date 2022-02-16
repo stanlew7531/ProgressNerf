@@ -12,8 +12,7 @@ class MSEBetaRegLoss(AbstractLoss):
         self.reg_lambda = config['beta_regularization_term']
     
     def calculateLoss(self, gt_pixels:torch.Tensor, rendered_pixels:torch.Tensor, **kwargs):
-        alphas = kwargs["alphas"] #(batch_size, num_rays, num_samples)
-        #alphas = alphas[:,:,-1:] # get the last element to be alpha
+        alphas = kwargs["alphas"] #(batch_size, num_rays)
         alphas = (alphas * (1. - 1e-7)) + 0.5e-7 # use to prevent the beta dist from evaluating to inf
         reg_value = self.reg_lambda * (torch.mean(torch.log(alphas) + torch.log(1.0 - alphas)))
         rgb_error = self.loss_fn(gt_pixels, rendered_pixels)

@@ -38,7 +38,7 @@ class WeightedRaypicker(AbstractRaypicker):
         batch_size = ray_weights.shape[0]
 
         rays_to_pick = self.baseRays\
-            .reshape((self.width * self.height, 3))\
+            .reshape((1, self.width * self.height, 3))\
                 .repeat(batch_size, 1, 1).contiguous()\
                 .to(dtype = camera_tfs.dtype, device = camera_tfs.device)# (batch_dim, W*H, 3)
 

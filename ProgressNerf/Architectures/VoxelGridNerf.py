@@ -1,4 +1,5 @@
 # dependency imports
+from cgi import test
 import cv2 as cv
 from datetime import datetime
 from doctest import OutputChecker
@@ -7,7 +8,6 @@ import numpy as np
 from numpy.core.numeric import full
 import os
 from os.path import exists
-from pyrsistent import b
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -28,7 +28,6 @@ from ProgressNerf.Registries.LossRegistry import get_loss
 from ProgressNerf.Utils.CameraUtils import BuildCameraMatrix
 from ProgressNerf.Utils.FolderUtils import last_epoch_from_output_dir
 from ProgressNerf.Utils.VoxelGrid import VoxelGrid
-from ProgressNerf.Utils.ParticleField import ParticleField
 # import the supported arch dataloaders here
 import ProgressNerf.Dataloading.ToolsPartsDataloader
 
@@ -48,6 +47,7 @@ import ProgressNerf.Encoders.PositionalEncoder
 
 # import the supported arch models here
 import ProgressNerf.Models.OGNerf
+import ProgressNerf.Models.FastNerf
 
 # import the supported arch renderers here
 import ProgressNerf.NeuralRendering.NeuralRenderer
@@ -71,8 +71,6 @@ class VoxelGridNerf(object):
         # parse the configuration & populate values
         print("parsing config")
         self.parseConfig(config)
-
-        self.particle_field = ParticleField(self.cam_matrix.to(self.device), self.render_height, self.render_width)
 
         if(self.train_loader is not None):
             # if we are training, we init the NN models and the optimizer
@@ -195,15 +193,24 @@ class VoxelGridNerf(object):
 
         coarse_config = config['coarse_model']
         self.nn = get_model(coarse_config['nnModel'])(coarse_config[coarse_config['nnModel']])
-
+        self.doCacheBuild = False
         if('fine_model' in config.keys()):
             fine_config = config['fine_model']
 
             self.nn_fine = get_model(fine_config['nnModel'])(fine_config[fine_config['nnModel']])
             self.raysampler_fine = get_raysampler(fine_config['raysampler'])(fine_config[fine_config['raysampler']])
+            self.doCacheBuild = fine_config['nnModel'] == "fast_nerf"
         else:
             self.nn_fine = None
             self.raysampler_fine = None
+
+        make_cache = config['make_cache'] if 'make_cache' in config.keys() else False
+        l = config['cache_l'] if make_cache else None
+        cache_voxel_size = config['cache_voxel_size'] if make_cache else None
+        axes_min_max = torch.Tensor([float(val) for val in config['boundary_min_maxes']]).reshape((2,3)).to(dtype=torch.float32) if make_cache else None
+        self.uvws_cache = VoxelGrid(axes_min_max, cache_voxel_size, (config['cache_D'] * 3 + 1)) if make_cache else None
+        self.uvws_cache.to(self.device)
+        self.beta_cache = torch.zeros((l,l,config['cache_D'])).to(self.device) if make_cache else None
 
         self.tool = config['desired_tool']
         self.masks = None
@@ -226,6 +233,8 @@ class VoxelGridNerf(object):
             torch.save(self.nn_fine.state_dict(), os.path.join(output_dir, "mlp_dict_fine.ptr"))
         torch.save(self.optimizer.state_dict(), os.path.join(output_dir, "optimizer_dict.ptr"))
         self.voxel_grid.save(os.path.join(output_dir, "voxel_grid.ptr"))
+        self.uvws_cache.save(os.path.join(output_dir, "uvws_cache.ptr"))
+        torch.save({'beta_cache': self.beta_cache},os.path.join(output_dir,"beta_cache.ptr"))
 
     def loadNNModels(self, checkpoint_dir:str = "latest"):
         input_dir = os.path.join(self.base_dir, checkpoint_dir)
@@ -239,18 +248,33 @@ class VoxelGridNerf(object):
         input_dir = os.path.join(self.base_dir, checkpoint_dir)
         self.loadNNModels(checkpoint_dir)
         self.optimizer.load_state_dict(torch.load(os.path.join(input_dir, "optimizer_dict.ptr")))
+        for g in self.optimizer.param_groups:
+            g['lr'] = self.lr
         self.voxel_grid = VoxelGrid.load(os.path.join(checkpoint_dir, "voxel_grid.ptr"))
         self.voxel_grid.to(self.device)
+        self.uvws_cache = VoxelGrid.load(os.path.join(checkpoint_dir, "uvws_cache.ptr"))
+        self.uvws_cache.to(self.device)
+        self.beta_cache = torch.load(os.path.join(checkpoint_dir, "beta_cache.ptr"))['beta_cache'].to(self.device)
 
     # performs the per-ray sampling and final rendering
     # this is where the raysampler is called, as well as the renderer
     # produces rgb and est depth outputs from the provided ray origins and dirs
     # ray_origins: (batch_size, num_rays, 3)
     # ray_dirs: (batch_size, num_rays, 3)
-    def render(self, ray_origins, ray_dirs, mark_visited_voxels = False):
+    def render(self, ray_origins, ray_dirs, mark_visited_voxels = False, use_cache = False):
         # sampled_locations: (batch_size, num_rays, num_samples, 3)
         # sampled_distances: (batch_size, num_rays, num_samples)
         sampled_locations, sampled_distances = self.raysampler.sampleRays(ray_origins, ray_dirs, {'voxel_grid': self.voxel_grid})
+        #print(sampled_locations)
+        if use_cache:
+            cached_mlp_outputs = self.nn_fine.forward(sampled_locations, ray_dirs, use_cache=True, uvws_cache = self.uvws_cache, beta_cache = self.beta_cache)
+            rendered_output_cache = self.renderer.renderRays(cached_mlp_outputs, sampled_distances, voxels=self.voxel_grid, sample_locations=sampled_locations)
+            return rendered_output_cache
+
+        # sub the NaN, inf, etc. locations with appropriate values
+        max_val = self.voxel_grid.volume_bounds.max() + 1e6 # max axis value - will ensure all samples are outside the voxel range
+        sampled_locations = torch.nan_to_num(sampled_locations, nan=max_val, posinf=max_val, neginf=max_val)
+        sampled_distances = torch.nan_to_num(sampled_distances, nan=0, posinf=0, neginf=0)
 
         encoded_locs = self.pos_encoder.encodeFeature(sampled_locations)
         encoded_dirs = self.dir_encoder.encodeFeature(ray_dirs)
@@ -361,42 +385,31 @@ class VoxelGridNerf(object):
         # these are H,W ordere here, but get transposed in the render,etc. stages as necessary
         train_imgs = sample_batched['image'].to(self.device) # (batch_size, H, W, 3)
         train_depths = sample_batched['depth'].to(self.device) # (batch_size, H, W)
-
+        
         # get the camera poses
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
 
-        # create the ray weights tensor based on the provided segmentation tools/parts
-        # note that this is not always used by all raypickers (e.g. RandomRaypicker ignores this input)
-        #points_segmentation = torch.bitwise_not(self.particle_field.getPointsSegmentation(cam_poses))
-        #train_imgs.transpose(1,2)[points_segmentation, :] *= 0.0
-        #train_imgs.transpose(1,2)[points_segmentation, :] += 1.0
-        #train_depths.transpose(1,2)[points_segmentation] = 100.0
-        #points_segmentation = points_segmentation.to(torch.float32) # (batch_size, W, H)
-
         ray_weights = self.getSegementationWeighting(sample_batched) # (batch_size, W, H)
-
-        #background_points = points_segmentation.sum(dim=(1,2))
-        #foreground_points = ray_weights.sum(dim=(1,2))
-
-        #ray_weights *= ((background_points / (foreground_points + background_points)) * 1).unsqueeze(-1).unsqueeze(-1).repeat((1, self.render_height, self.render_width))
-        #points_segmentation *= (foreground_points / (foreground_points + background_points)).unsqueeze(-1).unsqueeze(-1).repeat((1, self.render_width, self.render_height))
-
-        #ray_weights += points_segmentation.transpose(-1,-2)
+        train_imgs_segmented = train_imgs.clone()
+        train_imgs_segmented[ray_weights == 0] = 1.0
+        train_depths_segmented = train_depths.clone()
+        train_depths_segmented[ray_weights == 0] = 0.0
+        voxel_grid_weights, ijs = self.voxel_grid.getVoxelGridBBox(self.cam_matrix.to(self.device), cam_poses, self.render_height, self.render_width)
+        ray_weights = 0.5*ray_weights + 0.5*voxel_grid_weights
 
         # run the raypicker & render for the object rays
         ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
+
         render_result = self.render(ray_origins, ray_dirs, mark_visited_voxels=mark_visited_voxels)
 
         # TODO: find out how to properly vectorize this indexing
-        ijs_label = torch.zeros_like(train_imgs)
         # populate object render results
         train_pixels = torch.zeros_like(render_result['rgb'])
         train_pixel_depths = torch.zeros_like(render_result['depth'])
         for i in range(train_pixels.shape[0]):
-            train_pixels[i] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
-            train_pixel_depths[i] = train_depths[i, ijs[i,:,1], ijs[i,:,0]]
-            ijs_label[i, ijs[i,:,1], ijs[i,:,0], :] = train_imgs[i, ijs[i,:,1], ijs[i,:,0], :]
-            
+            train_pixels[i] = train_imgs_segmented[i, ijs[i,:,1], ijs[i,:,0], :]
+            train_pixel_depths[i] = train_depths_segmented[i, ijs[i,:,1], ijs[i,:,0]]
+        
         return render_result, train_pixels, train_pixel_depths.unsqueeze(-1)
 
     # performs a rendering of the full image
@@ -417,11 +430,14 @@ class VoxelGridNerf(object):
     # camera_poses should be a Tensor of size (N, 4, 4) - comprised of N, 4x4 homogenous camera poses (in OpenCV/RH coords)
     def doEvalRendering(self, camera_poses:torch.Tensor):
         with torch.no_grad():
-            rendering_output = self.doFullRender(camera_poses)
+            # these are H,W ordere here, but get transposed in the render,etc. stages as necessary
+            #
+            rendering_output = self.doFullRender(camera_poses, use_cache = True)
             rgb_output = rendering_output['rgb'].contiguous().reshape((camera_poses.shape[0], self.render_width, self.render_height, 3)).transpose(1,2).contiguous()
-            return rgb_output
+            depth_output = rendering_output['depth'].contiguous().reshape((camera_poses.shape[0], self.render_width, self.render_height, 1)).transpose(1,2).contiguous()
+            return rgb_output, depth_output
 
-    def doFullRender(self, camera_poses:torch.Tensor):
+    def doFullRender(self, camera_poses:torch.Tensor, use_cache = False):
         ray_origins, ray_dirs = self.raypicker.getAllRays(camera_poses.to(self.device)) # (batch_dim, width*height, 3), (batch_dim, width*height, 3)
         total_sample_size = ray_origins.shape[1]
         num_subBatches = math.ceil(total_sample_size / self.eval_subBatchSize)
@@ -432,9 +448,9 @@ class VoxelGridNerf(object):
             end_idx = min((subBatch_idx + 1) * self.eval_subBatchSize, total_sample_size)
             subBatch_ray_origins = ray_origins[:,start_idx:end_idx,:]
             subBatch_ray_dirs = ray_dirs[:,start_idx:end_idx,:]
-            subBatch_rendering = self.render(subBatch_ray_origins, subBatch_ray_dirs)
+            subBatch_rendering = self.render(subBatch_ray_origins, subBatch_ray_dirs, use_cache=use_cache)
             if('rgb' in full_rendering.keys()):
-                full_rendering['rgb'] = torch.cat((full_rendering['rgb'], subBatch_rendering['rgb'].clone()), dim=1)
+                full_rendering['rgb'] = torch.cat((full_rendering['rgb'], subBatch_rendering['rgb_alpha'].clone()), dim=1)
             else:
                 full_rendering['rgb'] = subBatch_rendering['rgb'].clone()
 
@@ -483,7 +499,6 @@ class VoxelGridNerf(object):
         if(self.nn_fine is not None):
             self.nn_fine.train()
             self.nn_fine.to(self.device)
-            self.nn_fine.to(self.device)
 
         tqdm.write("Starting the main training loop")
         # main training loop
@@ -508,10 +523,10 @@ class VoxelGridNerf(object):
                 self.nn_fine.train()
             for i_batch, sample_batched in tqdm(enumerate(self.train_dataloader), leave = False):
                 rendered_output, train_pixels, train_depths = self.doTrainRendering(sample_batched, epoch >= self.voxel_visit_after)
-                losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb'],\
+                losses_i = self.train_loss.calculateLoss(train_pixels, rendered_output['rgb_alpha'],\
                     rendered_depths=rendered_output["depth"].unsqueeze(-1),\
                     gt_depths=train_depths,\
-                    alphas=rendered_output['alphas'])
+                    alphas=rendered_output['acc'])
                 losses_i['loss'].backward()
                 self.optimizer.step()
                 self.optimizer.zero_grad()
@@ -565,12 +580,15 @@ class VoxelGridNerf(object):
         
         # final end-of-training outputs test_loss
         losses_test = {}
+        self.nn.eval()
+        if(self.nn_fine is not None):
+            self.nn_fine.eval()
         with torch.no_grad():
             for i_batch, sample_batched in tqdm(enumerate(self.test_dataloader), leave = True):
                 rendered_output, test_images, test_depths = self.doTestRendering(sample_batched)
                 rgb_output = rendered_output['rgb'].reshape((1, self.render_width, self.render_height, 3)).transpose(1,2)
                 depth_output = rendered_output['depth'].reshape((1, self.render_width, self.render_height, 1)).transpose(1,2)
-                losses = self.test_loss.calculateLoss(test_images, rgb_output, rendered_depths=depth_output, gt_depths=test_depths)
+                losses_i = self.test_loss.calculateLoss(test_images, rgb_output, rendered_depths=depth_output, gt_depths=test_depths)
                 for key in losses_i.keys():
                     if(key in losses_test.keys()):
                         losses_test[key].append(losses_i[key].item())
@@ -585,10 +603,17 @@ class VoxelGridNerf(object):
         outputString = "Epoch:{0}".format(self.train_epochs)
         for key in losses_test.keys():
             avg = np.mean(losses_test[key])
-            self.tb_writer.add_scalar('test/{0}'.format(key), avg, epoch)
+            self.tb_writer.add_scalar('test/{0}'.format(key), avg, self.train_epochs)
             outputString = outputString + ' test/{0}:{1:.4f}'.format(key,avg)
         tqdm.write(outputString)
+
+        if(self.doCacheBuild):
+            tqdm.write("building cache")
+            self.nn_fine.populate_grid(self.uvws_cache, self.beta_cache, self.pos_encoder, self.dir_encoder)
+
         self.saveTrainState("epoch_{0}".format(self.train_epochs))
+
+        
 
 if __name__=="__main__":
     torch.manual_seed(42)
@@ -597,5 +622,4 @@ if __name__=="__main__":
     if(len(sys.argv) == 2):
         configFile = str(sys.argv[1])
     arch = VoxelGridNerf(configFile)
-    #arch.populateParticleField()
     arch.train()

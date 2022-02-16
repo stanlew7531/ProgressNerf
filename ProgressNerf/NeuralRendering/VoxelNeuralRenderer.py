@@ -31,6 +31,6 @@ class VoxelNeuralRenderer(AbstractRenderer):
         if(torch.any(in_bounds_results).item()):
             voxel_vals = voxel_grid.get_voxels_xyz(sample_locs[in_bounds_results, :])
             occupied_results[in_bounds_results] = (voxel_vals[:, 0] > 0) # (batch_size * num_rays * num_samples)
-        occupied_results = occupied_results.reshape((batch_size, num_rays, num_samples)) # (batch_size * num_rays * num_samples)
+        occupied_results = occupied_results.reshape((batch_size, num_rays, num_samples)) # (batch_size, num_rays, num_samples)
         
         return self.base_renderer.renderRays(raySamples = raySamples[...,:] * occupied_results[...,None], distances = distances)
