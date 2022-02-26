@@ -9,7 +9,7 @@ class VoxelGrid(object):
         self.volume_bounds = axesMinMax
         self.axesLengths = axesMinMax[1,:] - axesMinMax[0,:]
         self.voxelSize = voxelSize
-        self.shape = torch.ceil(self.axesLengths / voxelSize).to(torch.int)
+        self.shape = torch.floor(self.axesLengths / voxelSize).to(torch.int) + 1
         # update the axes length to reflect the increased volume from the ceil operation
         self.axesLengths = self.shape * voxelSize
         self.voxels = torch.zeros((self.shape[0].item(),self.shape[1].item(),self.shape[2].item(),stored_data_size), device=axesMinMax.device)
