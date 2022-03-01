@@ -213,9 +213,10 @@ class ConfigurableVoxelGridCachedNerf(object):
         self.config_cache_D = int(config['cache_config_D'])
         self.cache_D = int(config['cache_D'])
         self.num_config_dims = self.config_cache_bounds.shape[1]
-        self.uvws_cache = VoxelGrid(axes_min_max, cache_voxel_size, (self.cache_D * 3 + 1) * (self.config_cache_D ** self.num_config_dims)) if make_cache else None
-        self.uvws_cache.to(self.device)
-        self.beta_cache = torch.zeros((l,l,self.cache_D)).to(self.device) if make_cache else None
+        if(self.doCacheBuild):
+            self.uvws_cache = VoxelGrid(axes_min_max, cache_voxel_size, (self.cache_D * 3 + 1) * (self.config_cache_D ** self.num_config_dims)) if make_cache else None
+            self.uvws_cache.to(self.device)
+            self.beta_cache = torch.zeros((l,l,self.cache_D)).to(self.device) if make_cache else None
 
         self.tool = config['desired_tool']
         self.masks = None
@@ -238,8 +239,9 @@ class ConfigurableVoxelGridCachedNerf(object):
             torch.save(self.nn_fine.state_dict(), os.path.join(output_dir, "mlp_dict_fine.ptr"))
         torch.save(self.optimizer.state_dict(), os.path.join(output_dir, "optimizer_dict.ptr"))
         self.voxel_grid.save(os.path.join(output_dir, "voxel_grid.ptr"))
-        self.uvws_cache.save(os.path.join(output_dir, "uvws_cache.ptr"))
-        torch.save({'beta_cache': self.beta_cache},os.path.join(output_dir,"beta_cache.ptr"))
+        if(self.doCacheBuild):
+            self.uvws_cache.save(os.path.join(output_dir, "uvws_cache.ptr"))
+            torch.save({'beta_cache': self.beta_cache},os.path.join(output_dir,"beta_cache.ptr"))
 
     def loadNNModels(self, checkpoint_dir:str = "latest"):
         input_dir = os.path.join(self.base_dir, checkpoint_dir)
@@ -257,16 +259,17 @@ class ConfigurableVoxelGridCachedNerf(object):
             g['lr'] = self.lr
         self.voxel_grid = VoxelGrid.load(os.path.join(checkpoint_dir, "voxel_grid.ptr"))
         self.voxel_grid.to(self.device)
-        self.uvws_cache = VoxelGrid.load(os.path.join(checkpoint_dir, "uvws_cache.ptr"))
-        self.uvws_cache.to(self.device)
-        self.beta_cache = torch.load(os.path.join(checkpoint_dir, "beta_cache.ptr"))['beta_cache'].to(self.device)
+        if(self.doCacheBuild):
+            self.uvws_cache = VoxelGrid.load(os.path.join(checkpoint_dir, "uvws_cache.ptr"))
+            self.uvws_cache.to(self.device)
+            self.beta_cache = torch.load(os.path.join(checkpoint_dir, "beta_cache.ptr"))['beta_cache'].to(self.device)
 
     # performs the per-ray sampling and final rendering
     # this is where the raysampler is called, as well as the renderer
     # produces rgb and est depth outputs from the provided ray origins and dirs
     # ray_origins: (batch_size, num_rays, 3)
     # ray_dirs: (batch_size, num_rays, 3)
-    # configurations: (batch_size, num_rays, N) where N is the number of configurable joints
+    # configurations: (batch_size, N) where N is the number of configurable joints
     def render(self, ray_origins, ray_dirs, configurations, mark_visited_voxels = False, use_cache = False, config_cache_meta = {}):
         # sampled_locations: (batch_size, num_rays, num_samples, 3)
         # sampled_distances: (batch_size, num_rays, num_samples)

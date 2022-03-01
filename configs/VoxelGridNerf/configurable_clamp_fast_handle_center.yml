@@ -1,23 +1,23 @@
-baseDir: "/home/stanlew/Documents/ProgressNerfModels/fullTool/voxelNerf_clamp_fast/"
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/fullTool/voxelNerf_clamp_fast_handle/"
 load_from_epoch: -1
 batch_size: 2
 num_workers: 1
 train_epochs: 20
-testPeriod: 10
+testPeriod: 5
 save_period: 10
-device: "cuda:0"
+device: "cuda:1"
 build_weighting_cloud: True
 
 train_dataloader:
     dataloader: "semiSynDataloader"
-    semiSynDataloader: { baseDataDir: "/home/stanlew/data/clamp_semiSyn_dataset/", datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_bar']}
+    semiSynDataloader: { baseDataDir: "/home/stanlew/data/clamp_semiSyn_dataset/", datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_handle']}
 test_dataloader:
     dataloader: "semiSynDataloader"
-    semiSynDataloader: { baseDataDir: "/home/stanlew/data/clamp_semiSyn_dataset/", datasetType: "test", samplesLimit: 5, rel_tools: ['clamp_bar']}
+    semiSynDataloader: { baseDataDir: "/home/stanlew/data/clamp_semiSyn_dataset/", datasetType: "test", samplesLimit: 5, rel_tools: ['clamp_handle']}
 
 
-desired_tool: "clamp_bar"
-apply_masks: ['clamp_bar']
+desired_tool: "clamp_handle"
+apply_masks: ['clamp_handle']
 eval_subbatch_size: 1024
 
 raypicker: "weighted_raypicker"
@@ -52,7 +52,7 @@ configEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10, 
 dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
 optim_lr: 0.001
 
-init_voxel_size: 0.01
+init_voxel_size: 0.05
 voxel_visit_after_epoch: 50
 voxel_visit_depth_stoppage: 0.01
 voxel_visit_factor: 0.99
@@ -61,14 +61,14 @@ prune_voxels_schedule: []
 prune_voxels_sample_count: 16000
 prune_voxels_gamma: 0.5
 
-make_cache: True
+make_cache: False
 cache_l: 512
 cache_voxel_size: 0.00125
 cache_D: 8
 cache_config_D: 10
 cache_config_bounds: [0.06, 0.20]
 
-boundary_min_maxes: [-.1, -.16, -.02, .26, .09, .02]
+boundary_min_maxes: [-.36, -.26, -.02, .26, .09, .02]
 
 renderer: "voxel_neural_renderer"
 voxel_neural_renderer: {}

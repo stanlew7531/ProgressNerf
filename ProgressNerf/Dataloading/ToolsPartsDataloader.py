@@ -78,6 +78,7 @@ class ToolsPartsDataloader(torch.utils.data.Dataset):
             "image" : torch.from_numpy(img_data).to(dtype=torch.float32),\
             "depth" : depth_data.to(dtype=torch.float32),\
             "segmentation" : torch.from_numpy(seg_data).to(dtype=torch.float32),\
+            "idx" : torch.Tensor([idx]).to(dtype=int)\
             }
         for obj_key in pose_data:
             if(obj_key in self.rel_tools):
