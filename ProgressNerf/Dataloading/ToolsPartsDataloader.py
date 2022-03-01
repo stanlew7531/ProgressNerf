@@ -64,6 +64,7 @@ class ToolsPartsDataloader(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         img_file = self.scene_images[idx]
+        #print(img_file)
         depth_file = self.scene_depths[idx]
         pose_file = self.scene_poses[idx]
         seg_file = self.scene_segmentations[idx]

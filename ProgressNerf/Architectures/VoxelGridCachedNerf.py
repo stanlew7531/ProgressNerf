@@ -309,7 +309,7 @@ class VoxelGridCachedNerf(object):
 
     def getSegementationWeighting(self, sample_batched):
         segmentation_img = sample_batched['segmentation'].to(self.device) # (batch_size, W, H)
-
+        
         # create the ray weights tensor based on the provided segmentation tools/parts
         # note that this is not always used by all raypickers (e.g. RandomRaypicker ignores this input)
         ray_weights = torch.zeros_like(segmentation_img).to(self.device) #(batch_size, W, H)
@@ -318,7 +318,7 @@ class VoxelGridCachedNerf(object):
                 mask_seg_label = sample_batched[mask_name + "_label"] #(batch_size)
                 for batch_idx in range(mask_seg_label.shape[0]):
                     ray_weights[batch_idx] = torch.logical_or(ray_weights[batch_idx], segmentation_img[batch_idx] == mask_seg_label[batch_idx])
-
+        #cv.imshow("seg", ray_weights[0].cpu().numpy())
         return ray_weights
 
     def doVoxelPruning(self):
@@ -384,6 +384,7 @@ class VoxelGridCachedNerf(object):
         train_imgs = sample_batched['image'].to(self.device) # (batch_size, H, W, 3)
         train_depths = sample_batched['depth'].to(self.device) # (batch_size, H, W)
         
+        #cv.imshow("gt", train_imgs[0].cpu().numpy()[:,:,::-1])
         # get the camera poses
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
 
@@ -394,7 +395,9 @@ class VoxelGridCachedNerf(object):
         train_depths_segmented[ray_weights == 0] = 0.0
         voxel_grid_weights, ijs = self.voxel_grid.getVoxelGridBBox(self.cam_matrix.to(self.device), cam_poses, self.render_height, self.render_width)
         ray_weights = 0.5*ray_weights + 0.5*voxel_grid_weights
-
+        #cv.imshow("seg_bb", ray_weights[0].cpu().numpy())
+        #cv.imshow("seg_gt", ray_weights[0].cpu().numpy()[:,:,None] * train_imgs[0].cpu().numpy()[:,:,::-1])
+        #cv.waitKey(0)
         # run the raypicker & render for the object rays
         ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
 
@@ -426,11 +429,11 @@ class VoxelGridCachedNerf(object):
     # note that it is called in doTestRendering (for use during the training process), so some care is required
     # before making extensive modifications
     # camera_poses should be a Tensor of size (N, 4, 4) - comprised of N, 4x4 homogenous camera poses (in OpenCV/RH coords)
-    def doEvalRendering(self, camera_poses:torch.Tensor):
+    def doEvalRendering(self, camera_poses:torch.Tensor, use_cache=True):
         with torch.no_grad():
             # these are H,W ordere here, but get transposed in the render,etc. stages as necessary
             #
-            rendering_output = self.doFullRender(camera_poses, use_cache = True)
+            rendering_output = self.doFullRender(camera_poses, use_cache = use_cache)
             rgb_output = rendering_output['rgb'].contiguous().reshape((camera_poses.shape[0], self.render_width, self.render_height, 3)).transpose(1,2).contiguous()
             depth_output = rendering_output['depth'].contiguous().reshape((camera_poses.shape[0], self.render_width, self.render_height, 1)).transpose(1,2).contiguous()
             return rgb_output, depth_output

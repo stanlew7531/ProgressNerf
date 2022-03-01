@@ -192,8 +192,8 @@ class FastNerf(nn.Module):
                         positions = test_points[:,:] + position[0,:]
                         uvws_result = self.forward(pos_encoder.encodeFeature(positions), None, only_uvws=True) #(100, 4)
                         max_s, max_s_idx = torch.max(uvws_result[:, -1:], dim=0, keepdim=True)
-                        if(max_s.item() > 0):
-                            print("{0},{1},{2},{3}".format(x,y,z,max_s))
+                        #if(max_s.item() > 0):
+                        #    print("{0},{1},{2},{3}".format(x,y,z,max_s))
                         to_add = uvws_result[max_s_idx]
                         uvws_cache.set_voxels_xyz(position, to_add)
 
