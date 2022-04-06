@@ -58,9 +58,9 @@ import ProgressNerf.Losses.MSELoss
 import ProgressNerf.Losses.MSE_DepthLoss
 import ProgressNerf.Losses.BetaRegMSELoss
 
-# this architecture represents the original NeRF paper as proposed by Mildenhall et al.
-# see https://arxiv.org/abs/2003.08934 for further details
-class VoxelGridNerf(object):
+# this architecture represents a voxelized architecture similar to the FastNeRF one propsed by Garbin et al.
+# see: https://arxiv.org/abs/2103.10380 for more details
+class VoxelGridCachedNerf(object):
     def __init__(self, configFile:str) -> None:
         super().__init__()
         print("loading config at {0}".format(configFile))
@@ -181,9 +181,6 @@ class VoxelGridNerf(object):
         self.voxel_visit_depth_stoppage = float(config['voxel_visit_depth_stoppage']) if 'voxel_visit_depth_stoppage' in config.keys() else None
         self.voxel_visit_factor = float(config['voxel_visit_factor'])
 
-        self.build_weighting_cloud = config['build_weighting_cloud']
-        self.weighting_cloud = None
-
         self.renderer = get_renderer(config['renderer'])(config[config['renderer']])
 
         train_loss_config = config['train_loss']
@@ -193,13 +190,13 @@ class VoxelGridNerf(object):
 
         coarse_config = config['coarse_model']
         self.nn = get_model(coarse_config['nnModel'])(coarse_config[coarse_config['nnModel']])
-        self.doCacheBuild = False
+        self.doCacheBuild = coarse_config['nnModel'] == "fast_nerf"
         if('fine_model' in config.keys()):
             fine_config = config['fine_model']
 
             self.nn_fine = get_model(fine_config['nnModel'])(fine_config[fine_config['nnModel']])
             self.raysampler_fine = get_raysampler(fine_config['raysampler'])(fine_config[fine_config['raysampler']])
-            self.doCacheBuild = fine_config['nnModel'] == "fast_nerf"
+            self.doCacheBuild = self.doCacheBuild or fine_config['nnModel'] == "fast_nerf"
         else:
             self.nn_fine = None
             self.raysampler_fine = None
@@ -239,10 +236,10 @@ class VoxelGridNerf(object):
     def loadNNModels(self, checkpoint_dir:str = "latest"):
         input_dir = os.path.join(self.base_dir, checkpoint_dir)
         self.nn.load_state_dict(torch.load(os.path.join(input_dir, "mlp_dict.ptr")))
+        self.nn = self.nn.to(self.device)
         if(self.nn_fine is not None):
             self.nn_fine.load_state_dict(torch.load(os.path.join(input_dir,"mlp_dict_fine.ptr")))
-        self.nn = self.nn.to(self.device)
-        self.nn_fine = self.nn.to(self.device)
+            self.nn_fine = self.nn_fine.to(self.device)
 
     def loadTrainState(self, checkpoint_dir:str = "latest"):
         input_dir = os.path.join(self.base_dir, checkpoint_dir)
@@ -267,7 +264,8 @@ class VoxelGridNerf(object):
         sampled_locations, sampled_distances = self.raysampler.sampleRays(ray_origins, ray_dirs, {'voxel_grid': self.voxel_grid})
         #print(sampled_locations)
         if use_cache:
-            cached_mlp_outputs = self.nn_fine.forward(sampled_locations, ray_dirs, use_cache=True, uvws_cache = self.uvws_cache, beta_cache = self.beta_cache)
+            cache_nn = self.nn_fine if self.nn_fine is not None else self.nn
+            cached_mlp_outputs = cache_nn.forward(sampled_locations, ray_dirs, use_cache=True, uvws_cache = self.uvws_cache, beta_cache = self.beta_cache)
             rendered_output_cache = self.renderer.renderRays(cached_mlp_outputs, sampled_distances, voxels=self.voxel_grid, sample_locations=sampled_locations)
             return rendered_output_cache
 
@@ -311,7 +309,7 @@ class VoxelGridNerf(object):
 
     def getSegementationWeighting(self, sample_batched):
         segmentation_img = sample_batched['segmentation'].to(self.device) # (batch_size, W, H)
-
+        
         # create the ray weights tensor based on the provided segmentation tools/parts
         # note that this is not always used by all raypickers (e.g. RandomRaypicker ignores this input)
         ray_weights = torch.zeros_like(segmentation_img).to(self.device) #(batch_size, W, H)
@@ -320,7 +318,7 @@ class VoxelGridNerf(object):
                 mask_seg_label = sample_batched[mask_name + "_label"] #(batch_size)
                 for batch_idx in range(mask_seg_label.shape[0]):
                     ray_weights[batch_idx] = torch.logical_or(ray_weights[batch_idx], segmentation_img[batch_idx] == mask_seg_label[batch_idx])
-
+        #cv.imshow("seg", ray_weights[0].cpu().numpy())
         return ray_weights
 
     def doVoxelPruning(self):
@@ -386,6 +384,7 @@ class VoxelGridNerf(object):
         train_imgs = sample_batched['image'].to(self.device) # (batch_size, H, W, 3)
         train_depths = sample_batched['depth'].to(self.device) # (batch_size, H, W)
         
+        #cv.imshow("gt", train_imgs[0].cpu().numpy()[:,:,::-1])
         # get the camera poses
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
 
@@ -396,7 +395,9 @@ class VoxelGridNerf(object):
         train_depths_segmented[ray_weights == 0] = 0.0
         voxel_grid_weights, ijs = self.voxel_grid.getVoxelGridBBox(self.cam_matrix.to(self.device), cam_poses, self.render_height, self.render_width)
         ray_weights = 0.5*ray_weights + 0.5*voxel_grid_weights
-
+        #cv.imshow("seg_bb", ray_weights[0].cpu().numpy())
+        #cv.imshow("seg_gt", ray_weights[0].cpu().numpy()[:,:,None] * train_imgs[0].cpu().numpy()[:,:,::-1])
+        #cv.waitKey(0)
         # run the raypicker & render for the object rays
         ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
 
@@ -428,11 +429,11 @@ class VoxelGridNerf(object):
     # note that it is called in doTestRendering (for use during the training process), so some care is required
     # before making extensive modifications
     # camera_poses should be a Tensor of size (N, 4, 4) - comprised of N, 4x4 homogenous camera poses (in OpenCV/RH coords)
-    def doEvalRendering(self, camera_poses:torch.Tensor):
+    def doEvalRendering(self, camera_poses:torch.Tensor, use_cache=True):
         with torch.no_grad():
             # these are H,W ordere here, but get transposed in the render,etc. stages as necessary
             #
-            rendering_output = self.doFullRender(camera_poses, use_cache = True)
+            rendering_output = self.doFullRender(camera_poses, use_cache = use_cache)
             rgb_output = rendering_output['rgb'].contiguous().reshape((camera_poses.shape[0], self.render_width, self.render_height, 3)).transpose(1,2).contiguous()
             depth_output = rendering_output['depth'].contiguous().reshape((camera_poses.shape[0], self.render_width, self.render_height, 1)).transpose(1,2).contiguous()
             return rgb_output, depth_output
@@ -609,7 +610,7 @@ class VoxelGridNerf(object):
 
         if(self.doCacheBuild):
             tqdm.write("building cache")
-            self.nn_fine.populate_grid(self.uvws_cache, self.beta_cache, self.pos_encoder, self.dir_encoder)
+            self.nn.populate_grid(self.uvws_cache, self.beta_cache, self.pos_encoder, self.dir_encoder)
 
         self.saveTrainState("epoch_{0}".format(self.train_epochs))
 
@@ -621,5 +622,5 @@ if __name__=="__main__":
     configFile = "./configs/VoxelGridNerf/toolPartsCoarseFinePerturbedMasked.yml"
     if(len(sys.argv) == 2):
         configFile = str(sys.argv[1])
-    arch = VoxelGridNerf(configFile)
+    arch = VoxelGridCachedNerf(configFile)
     arch.train()

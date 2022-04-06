@@ -1,0 +1,80 @@
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/fullTool/voxelNerf_clamp_fast_handle/"
+load_from_epoch: -1
+batch_size: 2
+num_workers: 1
+train_epochs: 20
+testPeriod: 5
+save_period: 10
+device: "cuda:1"
+build_weighting_cloud: True
+
+train_dataloader:
+    dataloader: "semiSynDataloader"
+    semiSynDataloader: { baseDataDir: "/home/stanlew/data/clamp_semiSyn_dataset/", datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_handle']}
+test_dataloader:
+    dataloader: "semiSynDataloader"
+    semiSynDataloader: { baseDataDir: "/home/stanlew/data/clamp_semiSyn_dataset/", datasetType: "test", samplesLimit: 5, rel_tools: ['clamp_handle']}
+
+
+desired_tool: "clamp_handle"
+apply_masks: ['clamp_handle']
+eval_subbatch_size: 1024
+
+raypicker: "weighted_raypicker"
+weighted_raypicker: { num_rays: 128}
+raysampler: "voxel_grid_bbox"
+voxel_grid_bbox: { num_samples: 64}
+
+camera_fx: 536.5441342081624
+camera_fy: 537.6663041098749
+camera_tx: 324.1496087846382
+camera_ty: 224.2990274169881
+render_resoluion: [640,480]
+coarse_model:
+    nnModel: "config_fast_nerf"
+    config_fast_nerf: 
+        includeOrigPos: True
+        includeOrigConf: True
+        pos_enc_levels: 10
+        dir_enc_levels: 4
+        conf_enc_levels: 10
+        hidden_units_pos: 384
+        hidden_units_dir: 128
+        hidden_units_conf: 128
+        layers_pos: 8
+        layers_dir: 4
+        layers_conf: 4
+        D: 8
+        skips: [4]
+        configDegOfFreedom: 1
+posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10, includeOrig: True}}
+configEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10, includeOrig: True}}
+dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
+optim_lr: 0.001
+
+init_voxel_size: 0.05
+voxel_visit_after_epoch: 50
+voxel_visit_depth_stoppage: 0.01
+voxel_visit_factor: 0.99
+half_voxels_schedule: []
+prune_voxels_schedule: []
+prune_voxels_sample_count: 16000
+prune_voxels_gamma: 0.5
+
+make_cache: False
+cache_l: 512
+cache_voxel_size: 0.00125
+cache_D: 8
+cache_config_D: 10
+cache_config_bounds: [0.06, 0.20]
+
+boundary_min_maxes: [-.36, -.26, -.02, .26, .09, .02]
+
+renderer: "voxel_neural_renderer"
+voxel_neural_renderer: {}
+train_loss:
+    loss_fn: "mse_loss"
+    mse_loss: {}
+test_loss:
+    loss_fn: "mse_loss"
+    mse_loss: {}

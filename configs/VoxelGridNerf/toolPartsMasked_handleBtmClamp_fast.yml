@@ -1,4 +1,4 @@
-baseDir: "/home/stanlew/Documents/ProgressNerfModels/semiSynIn/voxelNerf_clampHandle_fast/"
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/semiSynIn/voxelNerf_clampHandleBtm_fast/"
 load_from_epoch: -1
 batch_size: 2
 num_workers: 1
@@ -10,13 +10,13 @@ build_weighting_cloud: True
 
 train_dataloader:
     dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_handle']}
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_handle', 'clamp_bottom_clamp']}
 test_dataloader:
     dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "test", samplesLimit: 3, rel_tools: ['clamp_handle']}
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "test", samplesLimit: 3, rel_tools: ['clamp_handle', 'clamp_bottom_clamp']}
 
 desired_tool: "clamp_handle"
-apply_masks: ['clamp_handle']
+apply_masks: ['clamp_handle', 'clamp_bottom_clamp']
 eval_subbatch_size: 1024
 
 raypicker: "weighted_raypicker"
@@ -32,11 +32,6 @@ render_resoluion: [640,480]
 coarse_model:
     nnModel: "fast_nerf"
     fast_nerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_units_pos: 384, hidden_units_dir: 128, layers_pos: 8, layers_dir: 4, D: 8, skips: [4]}
-fine_model:
-    nnModel: "fast_nerf"
-    fast_nerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_units_pos: 384, hidden_units_dir: 128, layers_pos: 8, layers_dir: 4, D: 8, skips: [4]}
-    raysampler: "weighted_raysampler"
-    weighted_raysampler: {num_samples: 128}
 posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10, includeOrig: True}}
 dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
 optim_lr: 0.001
@@ -55,7 +50,7 @@ cache_l: 1024
 cache_voxel_size: 0.001
 cache_D: 8
 
-boundary_min_maxes: [-0.0569, -0.1306, -0.0172, 0.0493,  0.0256,  0.0172]
+boundary_min_maxes: [-0.0587, -0.1306, -0.0192, 0.0493,  0.08921,  0.0192]
 
 renderer: "voxel_neural_renderer"
 voxel_neural_renderer: {}

@@ -1,11 +1,11 @@
-baseDir: "/home/stanlew/Documents/ProgressNerfModels/voxelNerf_clampTopClamp_fast/"
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/semiSynIn/voxelNerf_clampTopClamp_fast/"
 load_from_epoch: -1
 batch_size: 2
 num_workers: 1
-train_epochs: 10
+train_epochs: 50
 testPeriod: 10
 save_period: 10
-device: "cuda:1"
+device: "cuda:0"
 build_weighting_cloud: True
 
 train_dataloader:
@@ -13,7 +13,7 @@ train_dataloader:
     toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "train", samplesLimit: -1, rel_tools: ['clamp_top_clamp']}
 test_dataloader:
     dataloader: "toolsPartsDataloader"
-    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "test", samplesLimit: 5, rel_tools: ['clamp_top_clamp']}
+    toolsPartsDataloader: { baseDataDir: "/home/stanlew/data/PNERF-tool-parts/tool_parts/", scenes: ['00','01','02', '03','05'], datasetType: "test", samplesLimit: 3, rel_tools: ['clamp_top_clamp']}
 
 desired_tool: "clamp_top_clamp"
 apply_masks: ['clamp_top_clamp']
@@ -22,7 +22,7 @@ eval_subbatch_size: 1024
 raypicker: "weighted_raypicker"
 weighted_raypicker: { num_rays: 128}
 raysampler: "voxel_grid_bbox"
-voxel_grid_bbox: { num_samples: 128}
+voxel_grid_bbox: { num_samples: 64}
 
 camera_fx: 536.5441342081624
 camera_fy: 537.6663041098749

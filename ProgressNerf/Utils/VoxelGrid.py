@@ -9,7 +9,7 @@ class VoxelGrid(object):
         self.volume_bounds = axesMinMax
         self.axesLengths = axesMinMax[1,:] - axesMinMax[0,:]
         self.voxelSize = voxelSize
-        self.shape = torch.ceil(self.axesLengths / voxelSize).to(torch.int)
+        self.shape = torch.floor(self.axesLengths / voxelSize).to(torch.int) + 1
         # update the axes length to reflect the increased volume from the ceil operation
         self.axesLengths = self.shape * voxelSize
         self.voxels = torch.zeros((self.shape[0].item(),self.shape[1].item(),self.shape[2].item(),stored_data_size), device=axesMinMax.device)
@@ -96,7 +96,9 @@ class VoxelGrid(object):
         points_cam_frame = torch.matmul(torch.linalg.inv(cam_poses).unsqueeze(1), points_homo)# (N, 8, 4, 1)
         ijzs = torch.matmul(cam_matrix.unsqueeze(0), points_cam_frame[...,0:3,:].unsqueeze(-3)).squeeze() # (N, 8, 3)
         ijzs = ijzs[...,0:2]/ijzs[...,2:] # (N, 8, 2)
-        to_return = torch.zeros((ijzs.shape[0], render_height, render_width), device = self.points.device) # (N, H, W)        
+        if(len(ijzs.shape) == 2):
+            ijzs = ijzs.unsqueeze(0)
+        to_return = torch.zeros((ijzs.shape[0], render_height, render_width), device = self.points.device) # (N, H, W)
         for idx in range(ijzs.shape[0]):
             max_i = torch.max(ijzs[idx,:,0]).to(dtype=torch.long)
             min_i = torch.min(ijzs[idx,:,0]).to(dtype=torch.long)

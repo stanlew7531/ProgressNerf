@@ -14,16 +14,18 @@ from zmq import device
 from ProgressNerf.Registries.ModelRegistry import register_model
 from ProgressNerf.Utils.VoxelGrid import VoxelGrid
 
-@register_model('fast_nerf')
-class FastNerf(nn.Module):
+@register_model('config_fast_nerf')
+class ConfigurableFastNerf(nn.Module):
 
     """
     constructors - one from config Dict, other from raw params
     """
     def __init__(self, config:Dict):
-        super(FastNerf, self).__init__()
+        super(ConfigurableFastNerf, self).__init__()
         include_orig_pos_in = config['includeOrigPos'] if 'includeOrigPos' in config.keys() else False
         include_orig_dir_in = config['includeOrigDir'] if 'includeOrigDir' in config.keys() else False
+        include_orig_conf_in = config['includeOrigConf'] if 'includeOrigConf' in config.keys() else False
+        conf_vector_d = int(config['configDegOfFreedom'])
 
         if(include_orig_pos_in):
             pos_in_dims = (config['pos_enc_levels'] * 2 + 1) * 3 # (L * 2) + 1 for sin/cos functions while including original values
@@ -35,22 +37,33 @@ class FastNerf(nn.Module):
         else:
             dir_in_dims = config['dir_enc_levels'] * 2 * 3 # (L * 2) for sin/cos functions
 
+        if(include_orig_conf_in):
+            self.conf_in_dims = (config['conf_enc_levels'] * 2 + 1) * conf_vector_d # (L * 2) + 1 for sin/cos functions while including original values
+        else:
+            self.conf_in_dims = config['conf_enc_levels'] * 2 * conf_vector_d # (L * 2) for sin/cos functions
+
+
         pos_hidden = config['hidden_units_pos']
         dir_hidden = config['hidden_units_dir']
+        conf_hidden = config['hidden_units_conf']
         pos_layers = config['layers_pos']
         dir_layers = config['layers_dir']
+        conf_layers = config['layers_conf']
         self.D = config['D']
 
-        self.initialize(pos_in_dims, dir_in_dims, pos_hidden, dir_hidden, pos_layers, dir_layers, self.D)
+        self.initialize(pos_in_dims, dir_in_dims, self.conf_in_dims, pos_hidden, dir_hidden, conf_hidden, pos_layers, dir_layers, conf_layers, self.D)
     
-    def initialize(self, pos_in_dims, dir_in_dims, hidden_units_pos, hidden_units_dir, layers_pos, layers_dir, D):
+    def initialize(self, pos_in_dims, dir_in_dims, conf_in_dims, hidden_units_pos, hidden_units_dir, hidden_units_conf, layers_pos, layers_dir, layers_conf, D):
         """
         :param pos_in_dims: scalar, number of channels of encoded positions
         :param dir_in_dims: scalar, number of channels of encoded directions
-        :param pos_hidden:  scalar, number of hidden layer units for pos
-        :param dir_hidden:  scalar, number of hidden layer units for dir
-        :param pos_layers:  scalar, number of hidden layers for pos
-        :param dir_layers:  scalar, number of hidden layers for dir
+        :param conf_in_dims: scalar, number of channels of encoded configuration vector
+        :param hidden_units_pos:  scalar, number of hidden layer units for pos
+        :param hidden_units_dir:  scalar, number of hidden layer units for dir
+        :param hidden_units_conf:  scalar, number of hidden layer units for configuration
+        :param layers_pos:  scalar, number of hidden layers for pos
+        :param layers_dir:  scalar, number of hidden layers for dir
+        :param layers_conf:  scalar, number of hidden layers for configuration
         :param D:           scalar, number of hidden dimensions for the final dot product
         """
         self.pos_in_dims = pos_in_dims
@@ -71,19 +84,48 @@ class FastNerf(nn.Module):
         # self.layers_pos = nn.Sequential(*layers_pos_modules)
 
         self.layers_pos0 = nn.Sequential(
-            nn.Linear(pos_in_dims, hidden_units_pos), nn.ReLU(),
+            nn.Linear(pos_in_dims + conf_in_dims, hidden_units_pos), nn.ReLU(),
             nn.Linear(hidden_units_pos, hidden_units_pos), nn.ReLU(),
             nn.Linear(hidden_units_pos, hidden_units_pos), nn.ReLU(),
             nn.Linear(hidden_units_pos, hidden_units_pos), nn.ReLU(),
+        # self.layers_conf0 = nn.Sequential(
+        #     nn.Linear(pos_in_dims + conf_in_dims, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        # )
+
+        # self.layers_conf1 = nn.Sequential(
+        #     nn.Linear(hidden_units_conf + pos_in_dims + conf_in_dims, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, 3),
+        # )
         )
 
         self.layers_pos1 = nn.Sequential(
-            nn.Linear(hidden_units_pos + pos_in_dims, hidden_units_pos), nn.ReLU(),
+            nn.Linear(hidden_units_pos + pos_in_dims + conf_in_dims, hidden_units_pos), nn.ReLU(),
             nn.Linear(hidden_units_pos, hidden_units_pos), nn.ReLU(),
             nn.Linear(hidden_units_pos, hidden_units_pos), nn.ReLU(),
             nn.Linear(hidden_units_pos, hidden_units_pos), nn.ReLU(),
             nn.Linear(hidden_units_pos, (D * 3) + 1),
         )
+
+        # self.layers_conf0 = nn.Sequential(
+        #     nn.Linear(pos_in_dims + conf_in_dims, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        # )
+
+        # self.layers_conf1 = nn.Sequential(
+        #     nn.Linear(hidden_units_conf + pos_in_dims + conf_in_dims, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, hidden_units_conf),
+        #     nn.Linear(hidden_units_conf, 3),
+        # )
 
         layers_dir_modules = []
         layers_dir_modules.append(nn.Linear(dir_in_dims, hidden_units_dir))
@@ -97,9 +139,23 @@ class FastNerf(nn.Module):
         layers_dir_modules.append(nn.ReLU())
         self.layers_dir = nn.Sequential(*layers_dir_modules)
 
+        self.sigma_layer = nn.Linear(self.D, 1)
+
+    # def forward_conf_def(self, pos_enc, conf_enc):
+    #     # concat position & configuration data
+    #     x = torch.cat([pos_enc, conf_enc], dim=-1) # (H, W, N_sample, pos_in_dims + conf_in_dims)
+
+    #     # run first stage
+    #     x_prime = self.layers_conf0(x) # (H, W, N_sample, hidden_units_conf)
+
+    #     # run second skip stage
+    #     x_prime = self.layers_conf1(torch.cat([x_prime, x], dim=-1)) # (H, W, N_sample, 3)
+
+    #     return x_prime
+
     def forward_nn(self, pos_enc, dir_enc, only_uvws=False, only_betas=False):
         """
-        :param pos_enc: (H, W, N_sample, pos_in_dims) encoded positions
+        :param pos_enc: (H, W, N_sample, pos_in_dims + conf_in_dims) encoded positions/configurations
         :param dir_enc: (H, W, N_sample, dir_in_dims) encoded directions
         :return: rgb_density (H, W, N_sample, 4)
         """
@@ -137,17 +193,32 @@ class FastNerf(nn.Module):
 
         return rgb_den
 
-    def forward_cache(self, pos, dir, uvws_cache:VoxelGrid, beta_cache:torch.tensor):
+    def forward_cache(self, pos, dir, uvws_cache:VoxelGrid, beta_cache:torch.tensor, config_cache_meta = {}):
         """
-        :param pos_enc: (H, W, N_sample, 3) xyz positions
+        :param pos_enc: (H, W, N_sample, 3 + n_conf_dims) xyz positions & configuration vector
         :param dir_enc: (H, W, N_sample, 3) xyz directions
         :return: rgb_density (H, W, N_sample, 4)
         """
         # its 0130 when I wrote this - no judging allowed
+        conf = pos[...,3:].flatten(end_dim=-2) # (N, n_art_dims)
+        pos = pos[...,:3]
         in_bounds_results = uvws_cache.are_voxels_xyz_in_bounds(pos.view(-1, 3)) # (N)
         uvws_temp = uvws_cache.get_voxels_xyz(pos.view(-1, 3)[in_bounds_results])
-        uvws = torch.zeros((in_bounds_results.shape[0], uvws_temp.shape[-1]), device = uvws_temp.device, dtype=torch.float32) # (N, D*3 + 1
+        uvws = torch.zeros((in_bounds_results.shape[0], uvws_temp.shape[-1]), device = uvws_temp.device, dtype=torch.float32) # (N, config_D ** num_art_dims * (D*3 + 1))
         uvws[in_bounds_results] = uvws_temp
+
+        num_config_dims = config_cache_meta['num_config_dims']
+        config_cache_D = config_cache_meta['config_cache_D']
+        config_bounds = config_cache_meta['config_bounds'] # (2, num_config_dims)
+        config_widths = config_bounds[1] - config_bounds[0]
+        config_steps = config_widths / config_cache_D
+
+        view_dims = [-1]
+        for _ in range(num_config_dims):
+            view_dims.append(config_cache_D )
+        view_dims.append(-1)
+        conf_idx = torch.floor((conf - config_bounds[0])/config_steps).squeeze().to(torch.long)
+        
         ogShape = uvws.shape
         dir = dir.unsqueeze(-2).repeat(1,1,pos.shape[-2],1)
         l = beta_cache.shape[0]
@@ -157,26 +228,38 @@ class FastNerf(nn.Module):
         idx_j = torch.clamp(((phis.view(-1,1) + math.pi) * (l / (2*math.pi))).to(dtype=torch.long), min = 0, max = l-1)
         idx_betas = torch.cat((idx_i,idx_j), dim = -1)
         betas = beta_cache[idx_betas[...,0],idx_betas[...,1]].view(ogShape[0], 1, -1) # (N, 1, D)
-        uvw = uvws[...,:-1].view(ogShape[0], 3, int((ogShape[1]-1)/3)) # (N, 3, D)
+        view_dims = [ogShape[0]]
+        for _ in range(num_config_dims):
+            view_dims.append(config_cache_D )
+        view_dims.append(-1)
+        reshaped = uvws.view(*view_dims)[torch.arange(0,conf_idx.shape[0],dtype=torch.long, device=conf_idx.device), conf_idx]
+        uvw = reshaped[...,:-1].view(ogShape[0], 3, int((reshaped.shape[-1]-1)/3)) # (N, 3, D)
         s = uvws[...,-1:] # (N, 1)
         rgb = (uvw * betas).sum(dim=-1).sigmoid()
         rgb_den = torch.cat([rgb,s.relu()], dim=-1)
         inPosShape = pos.shape
         return rgb_den.reshape(inPosShape[0],inPosShape[1],inPosShape[2],4)
 
-    def forward(self, pos, dir, only_uvws=False, only_betas=False, use_cache=False, uvws_cache:VoxelGrid=None, beta_cache:torch.tensor=None):
+    def forward(self, pos, dir,\
+         only_uvws=False, only_betas=False, use_cache=False,\
+         uvws_cache:VoxelGrid=None, beta_cache:torch.tensor=None,\
+            config_cache_meta={}):
         if(not use_cache):
             return self.forward_nn(pos, dir, only_uvws, only_betas)
         else:
-            return self.forward_cache(pos, dir, uvws_cache, beta_cache)
+            return self.forward_cache(pos, dir, uvws_cache, beta_cache, config_cache_meta)
 
-    def populate_grid(self, uvws_cache:VoxelGrid, beta_cache:torch.Tensor, pos_encoder, dir_encoder):
+    def populate_grid(self, uvws_cache:VoxelGrid, beta_cache:torch.Tensor, pos_encoder, dir_encoder, config_encoder, config_bounds, config_D):
         with torch.no_grad():
             # populate the uvws cache
             bounds = uvws_cache.volume_bounds
             xs = torch.linspace(bounds[0,0],bounds[1,0], int(uvws_cache.shape[0].item()), dtype=torch.float32)
             ys = torch.linspace(bounds[0,1],bounds[1,1], int(uvws_cache.shape[1].item()), dtype=torch.float32)
             zs = torch.linspace(bounds[0,2],bounds[1,2], int(uvws_cache.shape[2].item()), dtype=torch.float32)
+            configs = torch.cartesian_prod(*[torch.linspace(config_bounds[0,i], config_bounds[1,i], config_D, dtype=torch.float32) for i in range(config_bounds.shape[-1])]) # (config_D ** num_art_dims, num_art_dims)
+            if(config_bounds.shape[-1] == 1):
+                configs = configs.unsqueeze(-1)
+            configs = config_encoder.encodeFeature(configs).to(beta_cache.device) # (config_D ** num_art_dims , 2 * 3 * config_encode_L)
             x_size = xs[1] - xs[0]
             y_size = ys[1] - ys[0]
             z_size = zs[1] - zs[0]
@@ -188,14 +271,18 @@ class FastNerf(nn.Module):
             for x in tqdm(xs,leave=False):
                 for y in tqdm(ys,leave=False):
                     for z in tqdm(zs,leave=False):
+
+                        inputs = configs.unsqueeze(1).repeat((1,100,1))# (config_D ** num_art_dims, 100, 2 * 3 * config_encode_L)
+
                         position = torch.Tensor([[x,y,z]]).to(beta_cache.device)
-                        positions = test_points[:,:] + position[0,:]
-                        uvws_result = self.forward(pos_encoder.encodeFeature(positions), None, only_uvws=True) #(100, 4)
-                        max_s, max_s_idx = torch.max(uvws_result[:, -1:], dim=0, keepdim=True)
-                        #if(max_s.item() > 0):
-                        #    print("{0},{1},{2},{3}".format(x,y,z,max_s))
-                        to_add = uvws_result[max_s_idx]
-                        uvws_cache.set_voxels_xyz(position, to_add)
+                        positions = test_points[:,:] + position[0,:] # (100, 3)
+                        positions = pos_encoder.encodeFeature(positions) # (100, 2 * 3 * pos_encode_L)
+                        positions = positions.unsqueeze(0).repeat(inputs.shape[0],1,1) # (config_D ** num_art_dims, 100, 2 * 3 * pos_encode_L)
+                        inputs = torch.cat((inputs, positions), dim = -1) # (config_D * num_art_dims, 100, (2 * 3 * config_encode_L) + (2 * 3 * pos_encode_L))
+                        uvws_result = self.forward(inputs, None, only_uvws=True) #(config_D * num_art_dims, 100, (cache_D * 3 + 1))
+                        _, max_s_idx = torch.max(uvws_result[:, :, -1:], dim=-2)
+                        to_add = torch.gather(uvws_result, 1, max_s_idx.unsqueeze(-1).repeat(1,1,uvws_result.shape[-1])) # (config_D ** num_art_dims, (cache_D * 3 + 1))
+                        uvws_cache.set_voxels_xyz(position, to_add.flatten())
 
             # populate the betas cache
             l = beta_cache.shape[0]

@@ -32,11 +32,6 @@ render_resoluion: [640,480]
 coarse_model:
     nnModel: "fast_nerf"
     fast_nerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_units_pos: 384, hidden_units_dir: 128, layers_pos: 8, layers_dir: 4, D: 8, skips: [4]}
-fine_model:
-    nnModel: "fast_nerf"
-    fast_nerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_units_pos: 384, hidden_units_dir: 128, layers_pos: 8, layers_dir: 4, D: 8, skips: [4]}
-    raysampler: "weighted_raysampler"
-    weighted_raysampler: {num_samples: 128}
 posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10, includeOrig: True}}
 dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
 optim_lr: 0.001
