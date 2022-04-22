@@ -30,6 +30,7 @@ from ProgressNerf.Utils.FolderUtils import last_epoch_from_output_dir
 from ProgressNerf.Utils.VoxelGrid import VoxelGrid
 # import the supported arch dataloaders here
 import ProgressNerf.Dataloading.ToolsPartsDataloader
+import ProgressNerf.Dataloading.YCBVideoDataloader
 
 # import the supported arch raypickers here
 import ProgressNerf.Raycasting.RandomRaypicker
