@@ -1,4 +1,5 @@
 from tracemalloc import start
+from turtle import back
 import torch
 import numpy as np
 import cv2 as cv
@@ -67,6 +68,20 @@ class VoxelGrid(object):
     def get_voxels_xyz(self, xyz_locations:torch.Tensor):
         voxel_locations = self.get_voxel_locs(xyz_locations) #torch.floor((xyz_locations[:] - self.volume_bounds[0,:]) / self.voxelSize).to(torch.long)
         return self[voxel_locations[:,0], voxel_locations[:,1], voxel_locations[:,2]]
+
+    # xyz_locations: (N,3) 3d locations to get the voxel values for
+    # returns: (N, stored_data_size)
+    # note: this function is tolerant to xyz locations that lie outside of the voxelized space
+    # if a requested location is outside of the space, zeros are returned instead
+    def get_voxels_xyz_tolerant(self, xyz_locations:torch.Tensor):
+        in_bounds = self.are_voxels_xyz_in_bounds(xyz_locations) #(N), booleans
+        voxel_locations = self.get_voxel_locs(xyz_locations) # (N, 3)
+        voxel_locations[...,0] = torch.clamp(voxel_locations[...,0], min = 0, max = self.size(dim = 0) - 1)
+        voxel_locations[...,1] = torch.clamp(voxel_locations[...,1], min = 0, max = self.size(dim = 1) - 1)
+        voxel_locations[...,2] = torch.clamp(voxel_locations[...,2], min = 0, max = self.size(dim = 2) - 1)
+        lookups = self[voxel_locations[:,0], voxel_locations[:,1], voxel_locations[:,2]]
+        backfills = torch.zeros((1, self.voxels.shape[-1]), dtype=torch.float32, device = self.voxels.device).expand(voxel_locations.shape[0], -1)
+        return torch.where(in_bounds.unsqueeze(-1).expand(-1, self.voxels.shape[-1]), lookups, backfills)
 
     # xyz_locations: (N, 3) 3d locations to get the voxel values for
     # values: (N, stored_data_size) data to assign to each voxel location

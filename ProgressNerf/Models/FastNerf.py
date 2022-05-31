@@ -144,10 +144,19 @@ class FastNerf(nn.Module):
         :return: rgb_density (H, W, N_sample, 4)
         """
         # its 0130 when I wrote this - no judging allowed
-        in_bounds_results = uvws_cache.are_voxels_xyz_in_bounds(pos.view(-1, 3)) # (N)
-        uvws_temp = uvws_cache.get_voxels_xyz(pos.view(-1, 3)[in_bounds_results])
-        uvws = torch.zeros((in_bounds_results.shape[0], uvws_temp.shape[-1]), device = uvws_temp.device, dtype=torch.float32) # (N, D*3 + 1
-        uvws[in_bounds_results] = uvws_temp
+        # print("pos shape")
+        # print(pos.view(-1, 3).shape)
+        # in_bounds_results = uvws_cache.are_voxels_xyz_in_bounds(pos.view(-1, 3)) # (N)
+        # print("in_bounds_results")
+        # print(in_bounds_results)
+        # uvws_temp = uvws_cache.get_voxels_xyz(pos.view(-1, 3)[in_bounds_results])
+        # print("uvws_temp shape")
+        # print(uvws_temp.shape)
+        # uvws = torch.zeros((in_bounds_results.shape[0], uvws_temp.shape[-1]), device = uvws_temp.device, dtype=torch.float32, requires_grad = True) # (N, D*3 + 1
+        # uvws[in_bounds_results] = uvws_temp.clone()
+
+        uvws = uvws_cache.get_voxels_xyz_tolerant(pos.view(-1, 3))
+
         ogShape = uvws.shape
         dir = dir.unsqueeze(-2).repeat(1,1,pos.shape[-2],1)
         l = beta_cache.shape[0]
