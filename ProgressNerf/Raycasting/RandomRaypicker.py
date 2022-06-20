@@ -19,6 +19,9 @@ class RandomRaypicker(AbstractRaypicker):
         self.baseRays = ComputeCameraEpipolars(self.camera_matrix, self.height, self.width)
         self.camera_initialized=True
 
+    def setDynamicParameters(self, **kwargs):
+        pass
+
     def getRays(self, camera_tfs: torch.Tensor, **kwargs):
         '''
         camera_tfs: batch_dim, 4, 4
@@ -69,3 +72,6 @@ class RandomRaypicker(AbstractRaypicker):
         ray_directions = torch.matmul(ray_rotations, picked_rays).squeeze(3) # (batch_dim, width*height, 3)
 
         return ray_origins, ray_directions
+
+    def getLearningParams(self):
+        return None

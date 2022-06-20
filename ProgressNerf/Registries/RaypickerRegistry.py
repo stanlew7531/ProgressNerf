@@ -11,7 +11,11 @@ class AbstractRaypicker(ABC):
 
     @abstractmethod
     def setCameraParameters(self, camera_matrix:torch.Tensor, vp_height, vp_width):
-        pass        
+        pass    
+
+    @abstractmethod
+    def setDynamicParameters(self, **kwargs):
+        pass    
 
     @abstractmethod
     def getRays(self, camera_origin:torch.Tensor, **kwargs):
@@ -19,6 +23,10 @@ class AbstractRaypicker(ABC):
 
     @abstractmethod
     def getAllRays(self, camera_origin:torch.Tensor, **kwargs):
+        pass
+
+    @abstractmethod
+    def getLearningParams(self):
         pass
 
 RAYPICKER_REGISTRY = {}
