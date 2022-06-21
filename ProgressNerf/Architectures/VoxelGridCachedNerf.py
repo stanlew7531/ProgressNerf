@@ -31,6 +31,7 @@ from ProgressNerf.Utils.VoxelGrid import VoxelGrid
 # import the supported arch dataloaders here
 import ProgressNerf.Dataloading.ToolsPartsDataloader
 import ProgressNerf.Dataloading.YCBVideoDataloader
+import ProgressNerf.Dataloading.YCBObjectDataloader
 
 # import the supported arch raypickers here
 import ProgressNerf.Raycasting.RandomRaypicker

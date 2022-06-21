@@ -26,8 +26,10 @@ class YCBVideoDataloader(torch.utils.data.Dataset):
         self.scene_depths = []
         self.scene_poses = []
         self.scene_segmentations = []
+        self.scene_ids = []
         for scene in self.scenes:
             for res in self.get_scene_images(scene):
+                self.scene_ids.append(scene)
                 self.scene_images.append(res)
                 self.scene_depths.append(self.change_img_depth(res))
                 self.scene_poses.append(self.change_img_poses(res))
@@ -69,6 +71,7 @@ class YCBVideoDataloader(torch.utils.data.Dataset):
         img_file = self.scene_images[idx]
         pose_file = self.scene_poses[idx]
         seg_file = self.scene_segmentations[idx]
+        scene_id = self.scene_ids[idx]
 
         img_data = np.ascontiguousarray(cv.imread(img_file, cv.IMREAD_COLOR)[:,:,::-1]) / 255.0 # swap from BGR to RGB and normalize
         meta_data = loadmat(pose_file)
@@ -80,7 +83,8 @@ class YCBVideoDataloader(torch.utils.data.Dataset):
             "image" : image_toReturn,\
             "depth" : torch.zeros_like(image_toReturn)[...,0],\
             "segmentation" : torch.from_numpy(seg_data).to(dtype=torch.float32),\
-            "idx" : torch.Tensor([idx]).to(dtype=int)\
+            "idx" : torch.Tensor([idx]).to(dtype=int),\
+            "scene" : torch.Tensor([scene_id]).to(dtype=int),\
             }
 
         for idx in range(len(indexes)):

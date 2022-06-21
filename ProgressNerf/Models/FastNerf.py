@@ -41,6 +41,8 @@ class FastNerf(nn.Module):
         dir_layers = config['layers_dir']
         self.D = config['D']
 
+        self.use_view_dirs = config['use_view_dirs']
+
         self.initialize(pos_in_dims, dir_in_dims, pos_hidden, dir_hidden, pos_layers, dir_layers, self.D)
     
     def initialize(self, pos_in_dims, dir_in_dims, hidden_units_pos, hidden_units_dir, layers_pos, layers_dir, D):
@@ -85,6 +87,7 @@ class FastNerf(nn.Module):
             nn.Linear(hidden_units_pos, (D * 3) + 1),
         )
 
+        # build up the direction dependent layers
         layers_dir_modules = []
         layers_dir_modules.append(nn.Linear(dir_in_dims, hidden_units_dir))
         layers_dir_modules.append(nn.ReLU())
@@ -115,7 +118,14 @@ class FastNerf(nn.Module):
         if(only_uvws):
             return x
 
-        betas = self.layers_dir(dir_enc) # (H, W, N_sample, D)
+        if(self.use_view_dirs):
+            betas = self.layers_dir(dir_enc) # (H, W, N_sample, D)
+        else:
+            # if we aren't using view_dirs, then just set the beta values to be the sum across UVW's
+            # TODO: this allocation is really pretty slow - need to make this better (just was expedient to write ATM)
+            betas = torch.ones(1, device=dir_enc.device, dtype=dir_enc.dtype)\
+                .expand(dir_enc.shape[0], dir_enc.shape[1], dir_enc.shape[2], self.D) # (H, W, N_sample, D)
+
         if only_betas:
             return betas
 

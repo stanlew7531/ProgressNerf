@@ -67,11 +67,16 @@ class OGNerfArch(object):
         if(self.train_loader is not None):
             # if we are training, we init the NN models and the optimizer
             print("initializing optimizer")
-            learning_params = list(self.nn.parameters())
+            learning_params = [{"params":self.nn.parameters()}]
             self.nn.to(self.device)
             if(self.nn_fine is not None):
                 self.nn_fine.to(self.device)
-                learning_params = learning_params + list(self.nn_fine.parameters())
+                learning_params.append({"params":self.nn_fine.parameters(), })
+
+            # some raypickers also have learning params, so we include those here as necessary
+            ray_picker_params = self.raypicker.getLearningParams()
+            if ray_picker_params is not None:
+                learning_params.append({"params":ray_picker_params, "lr":0.00001})
 
             # setup optimizer and loss function
             self.optimizer = torch.optim.Adam(learning_params, lr=self.lr)
@@ -145,6 +150,9 @@ class OGNerfArch(object):
         self.render_height = config['render_resoluion'][1]
         self.raypicker = get_raypicker(config['raypicker'])(config[config['raypicker']])
         self.raypicker.setCameraParameters(self.cam_matrix, self.render_height, self.render_width)
+
+        # note we only do train length here because we dont do pose pertubation during test/eval
+        self.raypicker.setDynamicParameters(num_images = self.train_loader.__len__(), device = self.device) 
 
         self.eval_subBatchSize = config['eval_subbatch_size']
 
@@ -267,7 +275,7 @@ class OGNerfArch(object):
         ray_weights = self.getSegementationWeighting(sample_batched)
         # get the camera poses & run the raypicker
         cam_poses = torch.linalg.inv(sample_batched['{0}_pose'.format(self.tool)]).to(self.device) # (batch_size, 4, 4)
-        ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights)
+        ray_origins, ray_dirs, ijs = self.raypicker.getRays(cam_poses, ray_weights = ray_weights, num_images = self.train_loader.__len__(), data_idx = sample_batched['idx'])
         ijs_label = torch.zeros_like(train_imgs)
         render_result = self.render(ray_origins, ray_dirs)
         # TODO: find out how to properly vectorize this indexing
