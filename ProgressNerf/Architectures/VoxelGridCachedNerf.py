@@ -32,6 +32,7 @@ from ProgressNerf.Utils.VoxelGrid import VoxelGrid
 import ProgressNerf.Dataloading.ToolsPartsDataloader
 import ProgressNerf.Dataloading.YCBVideoDataloader
 import ProgressNerf.Dataloading.YCBObjectDataloader
+import ProgressNerf.Dataloading.ProgLabelDataloader
 
 # import the supported arch raypickers here
 import ProgressNerf.Raycasting.RandomRaypicker
@@ -91,7 +92,7 @@ class VoxelGridCachedNerf(object):
                 learning_params.append({"params":ray_picker_params, "lr":0.00001})
 
             # setup optimizer and loss function
-            self.optimizer = torch.optim.Adam(learning_params, lr=self.lr, weight_decay = 0.0005)
+            self.optimizer = torch.optim.Adam(learning_params, lr=self.lr)
 
             if(self.start_epoch is not None):
                 load_checkpoint_dir = ""
@@ -260,9 +261,23 @@ class VoxelGridCachedNerf(object):
             g['lr'] = self.lr
         self.voxel_grid = VoxelGrid.load(os.path.join(checkpoint_dir, "voxel_grid.ptr"))
         self.voxel_grid.to(self.device)
-        self.uvws_cache = VoxelGrid.load(os.path.join(checkpoint_dir, "uvws_cache.ptr"))
+
+        if(os.path.exists(os.path.join(checkpoint_dir, "uvws_cache.ptr"))):
+            self.uvws_cache = VoxelGrid.load(os.path.join(checkpoint_dir, "uvws_cache.ptr"))
+        else:
+            if(self.uvws_cache is not None):
+                print("No UVWS cache found - proceeding with new one")
+            else:
+                raise Exception("No UVWS cache found, and no new one specified!")
         self.uvws_cache.to(self.device)
-        self.beta_cache = torch.load(os.path.join(checkpoint_dir, "beta_cache.ptr"))['beta_cache'].to(self.device)
+
+        if(os.path.exists(os.path.join(checkpoint_dir, "beta_cache.ptr"))):
+            self.beta_cache = torch.load(os.path.join(checkpoint_dir, "beta_cache.ptr"))['beta_cache'].to(self.device)
+        else:
+            if(self.beta_cache is not None):
+                print("No beta cache found - proceeding with new one")
+            else:
+                raise Exception("No beta cache found, and no new one specified!")
 
     # performs the per-ray sampling and final rendering
     # this is where the raysampler is called, as well as the renderer
