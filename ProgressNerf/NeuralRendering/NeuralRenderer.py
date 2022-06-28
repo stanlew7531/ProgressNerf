@@ -38,7 +38,8 @@ class NeuralRenderer(AbstractRenderer):
 
         render_result = {
             "rgb" : rgb_rendered, # (batch_size, num_rays, 3)
-            "rgb_alpha" : rgb_alpha, # (batch_size, num_rays, 3)
+            "rgb_samples": rgb_samples, #(batch_size, num_rays, num_samples, 3)
+            #"rgb_alpha" : rgb_alpha, # (batch_size, num_rays, 3)
             "alphas" : alphas, # (batch_size, num_rays, num_samples)
             "transmittances" : Tis, # (batch_size, num_rays, num_samples)
             "weights" : weights, #(batch_size, num_rays, num_samples)

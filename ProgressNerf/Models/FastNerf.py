@@ -116,7 +116,9 @@ class FastNerf(nn.Module):
             x = self.layers_pos0(pos_enc)  # (H, W, N_sample, hidden_units_pos)
             x = self.layers_pos1(torch.cat([pos_enc, x], dim=-1)) # (H, W, N_sample, (D * 3 + 1)
         if(only_uvws):
-            return x
+            density = x[:,:,:,-1:]
+            uvw = x[:,:,:,:-1]
+            return torch.cat([uvw, density.relu()], dim=-1)
 
         if(self.use_view_dirs):
             betas = self.layers_dir(dir_enc) # (H, W, N_sample, D)
@@ -196,9 +198,9 @@ class FastNerf(nn.Module):
             xs = torch.linspace(bounds[0,0],bounds[1,0], int(uvws_cache.shape[0].item()), dtype=torch.float32)
             ys = torch.linspace(bounds[0,1],bounds[1,1], int(uvws_cache.shape[1].item()), dtype=torch.float32)
             zs = torch.linspace(bounds[0,2],bounds[1,2], int(uvws_cache.shape[2].item()), dtype=torch.float32)
-            x_size = xs[1] - xs[0]
-            y_size = ys[1] - ys[0]
-            z_size = zs[1] - zs[0]
+            x_size = y_size = z_size = uvws_cache.voxelSize #xs[1] - xs[0]
+            #ys[1] - ys[0]
+            #zs[1] - zs[0]
             test_points = torch.rand((100,3), device = beta_cache.device)
             test_points[:,0] *= x_size
             test_points[:,1] *= y_size
@@ -209,11 +211,12 @@ class FastNerf(nn.Module):
                     for z in tqdm(zs,leave=False):
                         position = torch.Tensor([[x,y,z]]).to(beta_cache.device)
                         positions = test_points[:,:] + position[0,:]
-                        uvws_result = self.forward(pos_encoder.encodeFeature(positions), None, only_uvws=True) #(100, 4)
+                        uvws_result = self.forward(pos_encoder.encodeFeature(positions.unsqueeze(0).unsqueeze(0)), None, only_uvws=True)[0,0] #(100, 4)
                         max_s, max_s_idx = torch.max(uvws_result[:, -1:], dim=0, keepdim=True)
                         #if(max_s.item() > 0):
                         #    print("{0},{1},{2},{3}".format(x,y,z,max_s))
-                        to_add = uvws_result[max_s_idx]
+                        #to_add = uvws_result[max_s_idx]
+                        to_add = torch.mean(uvws_result, dim=0) # (4)
                         uvws_cache.set_voxels_xyz(position, to_add)
 
             # populate the betas cache

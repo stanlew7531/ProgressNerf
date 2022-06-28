@@ -19,13 +19,20 @@ class ProgLabelDataloader(torch.utils.data.Dataset):
         self.objectName = config['object_label']
         self.numToLoad = config['samplesLimit']
 
+        self.load_depth = config['load_depth']
+        self.load_seg = config['load_seg']
+
         self.scene_images = list(self.get_object_images())
         self.poses = [self.get_poses(img) for img in self.scene_images]
+        self.segmentations = [imgName.replace("rgb", "seg") for imgName in self.scene_images]
+        self.depths = [imgName.replace("rgb", "depth").replace("png", "npy") for imgName in self.scene_images]
 
         if(self.numToLoad is not None and self.numToLoad > 0):
             indices = np.random.choice(len(self.scene_images), self.numToLoad)
             self.scene_images = [self.scene_images[idx] for idx in indices]
             self.poses = [self.poses[idx] for idx in indices]
+            self.depths = [self.depths[idx] for idx in indices]
+            self.segmentations = [self.segmentations[idx] for idx in indices]
         
 
     def get_object_images(self, base_dir=None, objectName=None):
@@ -55,14 +62,26 @@ class ProgLabelDataloader(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         img_file = self.scene_images[idx]
-
+        depth_file = self.depths[idx]
+        seg_file = self.segmentations[idx]
         img_data = np.ascontiguousarray(cv.imread(img_file, cv.IMREAD_COLOR)[:,:,::-1]) / 255.0 # swap from BGR to RGB and normalize
-        seg_data = np.all((img_data > 0), axis = -1) * 1.0
-        img_data[seg_data == 0.0 , ...] = 1.0
+        
         image_toReturn = torch.from_numpy(img_data).to(dtype=torch.float32)
+
+        if self.load_depth:
+            depth = np.load(depth_file)
+        else:
+            depth = torch.zeros_like(image_toReturn)[...,0]
+
+        if self.load_seg:
+            seg_data = cv.imread(seg_file, cv.IMREAD_UNCHANGED)[...,0]
+        else:
+            seg_data = np.all((img_data > 0), axis = -1) * 1.0
+            img_data[seg_data == 0.0 , ...] = 1.0
+
         toReturn = {\
             "image" : image_toReturn,\
-            "depth" : torch.zeros_like(image_toReturn)[...,0],\
+            "depth" : depth,\
             "segmentation" : torch.from_numpy(seg_data).to(dtype=torch.float32),\
             "idx" : torch.Tensor([idx]).to(dtype=int),\
             "scene" : torch.Tensor([0]).to(dtype=int),\
@@ -73,6 +92,6 @@ class ProgLabelDataloader(torch.utils.data.Dataset):
         label_key = obj_key + "_label"
         pose = self.poses[idx]
         toReturn[pose_key] = torch.linalg.inv(torch.from_numpy(pose).to(dtype=torch.float32))
-        toReturn[label_key] = 1.0
+        toReturn[label_key] = 255
 
         return toReturn

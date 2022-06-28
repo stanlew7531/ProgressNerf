@@ -7,6 +7,7 @@ from ProgressNerf.Registries.RaysamplerRegistry import register_raysampler, Abst
 class VoxelGridBBoxRaysampler(AbstractRaysampler):
     def __init__(self, config: Dict):
         self.num_samples = config["num_samples"]
+        self.sample_std = config["sample_std"]
     
     def sampleRays(self, ray_origins: torch.Tensor, ray_dirs: torch.Tensor, other_info:Dict=None):
         '''
@@ -25,6 +26,8 @@ class VoxelGridBBoxRaysampler(AbstractRaysampler):
         deltas = deltas * alphas
         distances = min_taus.reshape(batch_size, num_rays,1).repeat((1,1,self.num_samples)) + deltas
         distances = distances.unsqueeze(-1).repeat((1, 1, 1, 3)) # (batch_size, num_rays, num_samples, 3)
+        distance_pertubations = torch.randn(distances.shape, dtype = distances.dtype, device = distances.device) * self.sample_std
+        distances , _ = (distances + distance_pertubations).sort(dim=2)
         ray_origins = ray_origins.unsqueeze(2).repeat(1,1, self.num_samples, 1) # (batch_size, num_rays, num_samples, 3)
         ray_dirs = ray_dirs.unsqueeze(2).repeat(1,1, self.num_samples, 1) # (batch_size, num_rays, num_samples, 3)
         samples = (ray_dirs * distances)  + ray_origins
