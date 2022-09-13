@@ -1,0 +1,68 @@
+baseDir: "/home/stanlew/Documents/ProgressNerfModels/ProgLabel/soup_can_pared_chicken_perturbed3/"
+load_from_epoch: -1
+batch_size: 2
+num_workers: 1
+train_epochs: 5000
+testPeriod: 25
+save_period: 25
+device: "cuda:0"
+build_weighting_cloud: True
+
+train_dataloader:
+    dataloader: "ProgLabelDataloader"
+    ProgLabelDataloader: { baseDataDir: "/mnt/Data/liz_data/chicken_noodle_soup_output_UPDATED/output", object_label: "tomato.instance001", samplesLimit: 500, load_depth: True, load_seg: True}
+test_dataloader:
+    dataloader: "ProgLabelDataloader"
+    ProgLabelDataloader: { baseDataDir: "/mnt/Data/liz_data/chicken_noodle_soup_output_UPDATED/output", object_label: "tomato.instance001", samplesLimit: 5, load_depth: True, load_seg: True}
+
+desired_tool: "tomato.instance001"
+apply_masks: ['tomato.instance001']
+eval_subbatch_size: 1024
+
+raypicker: "weighted_raypicker"
+weighted_raypicker: { num_rays: 1024}
+raysampler: "voxel_grid_bbox"
+voxel_grid_bbox: { num_samples: 124, sample_std: 0.005}
+
+camera_fx: 896.861083984375
+camera_fy: 897.2031860351562
+camera_tx: 660.5230712890625
+camera_ty: 381.4194030761719
+render_resoluion: [1280,720]
+coarse_model:
+    nnModel: "fast_nerf"
+    fast_nerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_units_pos: 384, hidden_units_dir: 128, layers_pos: 8, layers_dir: 4, D: 8, use_view_dirs: False}
+# fine_model:
+#     nnModel: "fast_nerf"
+#     fast_nerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_units_pos: 384, hidden_units_dir: 128, layers_pos: 8, layers_dir: 4, D: 8, use_view_dirs: True}
+#     raysampler: "weighted_raysampler"
+#     weighted_raysampler: {num_samples: 256}
+
+posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 10, includeOrig: True}}
+dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
+optim_lr: 0.001
+
+init_voxel_size: 0.01
+voxel_visit_after_epoch: 50
+voxel_visit_depth_stoppage: 0.01
+voxel_visit_factor: 0.99
+half_voxels_schedule: []
+prune_voxels_schedule: []
+prune_voxels_sample_count: 16000
+prune_voxels_gamma: 0.5
+
+make_cache: True
+cache_l: 64
+cache_voxel_size: 0.001
+cache_D: 8
+
+boundary_min_maxes: [-0.05, -0.05, -0.07, 0.05, 0.05, 0.07]
+
+renderer: "voxel_neural_renderer"
+voxel_neural_renderer: {}
+train_loss:
+    loss_fn: "mse_depth_loss"
+    mse_depth_loss: {}
+test_loss:
+    loss_fn: "mse_depth_loss"
+    mse_depth_loss: {}

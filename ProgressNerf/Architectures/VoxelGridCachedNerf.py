@@ -33,6 +33,7 @@ import ProgressNerf.Dataloading.ToolsPartsDataloader
 import ProgressNerf.Dataloading.YCBVideoDataloader
 import ProgressNerf.Dataloading.YCBObjectDataloader
 import ProgressNerf.Dataloading.ProgLabelDataloader
+import ProgressNerf.Dataloading.PyBulletDataloader
 
 # import the supported arch raypickers here
 import ProgressNerf.Raycasting.RandomRaypicker

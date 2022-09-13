@@ -1,0 +1,68 @@
+baseDir: "/mnt/Data/FetchDatagen/models/"
+load_from_epoch: -1
+batch_size: 3
+num_workers: 1
+train_epochs: 350
+testPeriod: 10
+save_period: 10
+device: "cuda:0"
+build_weighting_cloud: True
+
+train_dataloader:
+    dataloader: "pybulletDataloader"
+    pybulletDataloader: { baseDataDir: "/mnt/Data/FetchDatagen/", scenes: ['00'], datasetType: "train", samplesLimit: -1, rel_tools: ['shoulder_lift_link']}
+test_dataloader:
+    dataloader: "pybulletDataloader"
+    pybulletDataloader: { baseDataDir: "/mnt/Data/FetchDatagen/", scenes: ['00'], datasetType: "train", samplesLimit: 5, rel_tools: ['shoulder_lift_link']}
+
+desired_tool: "shoulder_lift_link"
+apply_masks: ['shoulder_lift_link']
+eval_subbatch_size: 1024
+
+raypicker: "weighted_raypicker"
+weighted_raypicker: { num_rays: 1132}
+raysampler: "voxel_grid_bbox"
+voxel_grid_bbox: { num_samples: 64, sample_std: 0.0025}
+
+camera_fx: 1.299038052558899
+camera_fy: 1.299038052558899
+camera_tx: 640
+camera_ty: 480
+render_resoluion: [1280,960]
+coarse_model:
+    nnModel: "fast_nerf"
+    fast_nerf: {includeOrigPos: True, pos_enc_levels: 14, dir_enc_levels: 4, hidden_units_pos: 512, hidden_units_dir: 128, layers_pos: 8, layers_dir: 4, D: 16, use_view_dirs: False}
+# fine_model:
+#     nnModel: "fast_nerf"
+#     fast_nerf: {includeOrigPos: True, pos_enc_levels: 10, dir_enc_levels: 4, hidden_units_pos: 384, hidden_units_dir: 128, layers_pos: 8, layers_dir: 4, D: 8, use_view_dirs: True}
+#     raysampler: "weighted_raysampler"
+#     weighted_raysampler: {num_samples: 256}
+
+posEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 14, includeOrig: True}}
+dirEncoder: {encoder: "positional_encoder", positional_encoder: {levels: 4}}
+optim_lr: 0.00075
+
+init_voxel_size: 0.01
+voxel_visit_after_epoch: 50
+voxel_visit_depth_stoppage: 0.01
+voxel_visit_factor: 0.99
+half_voxels_schedule: []
+prune_voxels_schedule: []
+prune_voxels_sample_count: 16000
+prune_voxels_gamma: 0.5
+
+make_cache: True
+cache_l: 1024
+cache_voxel_size: 0.01
+cache_D: 16
+
+boundary_min_maxes: [-0.15, -0.15, -0.15, 0.15, 0.15, 0.15]
+
+renderer: "voxel_neural_renderer"
+voxel_neural_renderer: {}
+train_loss:
+    loss_fn: "mse_loss"
+    mse_loss: {}
+test_loss:
+    loss_fn: "mse_loss"
+    mse_loss: {}
